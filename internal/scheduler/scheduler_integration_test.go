@@ -88,11 +88,10 @@ func TestScheduler_PopDueRetries(t *testing.T) {
 	// Wait for webhook to be re-enqueued
 	select {
 	case msg := <-received:
-		var wh broker.Message
 		assert.Equal(t, webhook.ID, string(msg.Key))
 
 		// Verify it's the webhook we scheduled
-		var receivedWebhook testutil.WebhookTest
+		var receivedWebhook domain.Webhook
 		err := json.Unmarshal(msg.Value, &receivedWebhook)
 		if err == nil {
 			t.Logf("Received webhook ID from Kafka: %v", receivedWebhook)
@@ -200,7 +199,7 @@ func TestScheduler_ReEnqueueToKafka(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Schedule 3 retries that are all due
-	webhooks := make([]*testutil.WebhookTest, 3)
+	webhooks := make([]*domain.Webhook, 3)
 	for i := 0; i < 3; i++ {
 		webhook := testutil.NewTestWebhook("https://example.com/webhook")
 		webhooks[i] = webhook
