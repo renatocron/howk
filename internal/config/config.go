@@ -28,6 +28,7 @@ type Config struct {
 	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
 	Scheduler      SchedulerConfig      `mapstructure:"scheduler"`
 	TTL            TTLConfig            `mapstructure:"ttl"`
+	Lua            LuaConfig            `mapstructure:"lua"`
 }
 
 type APIConfig struct {
@@ -62,6 +63,7 @@ type TopicsConfig struct {
 	Pending    string `mapstructure:"pending"`
 	Results    string `mapstructure:"results"`
 	DeadLetter string `mapstructure:"deadletter"`
+	Scripts    string `mapstructure:"scripts"`
 }
 
 type RedisConfig struct {
@@ -105,6 +107,16 @@ type SchedulerConfig struct {
 	LockTimeout  time.Duration `mapstructure:"lock_timeout"`
 }
 
+type LuaConfig struct {
+	Enabled       bool              `mapstructure:"enabled"`
+	Timeout       time.Duration     `mapstructure:"timeout"`
+	MemoryLimitMB int               `mapstructure:"memory_limit_mb"`
+	AllowedHosts  []string          `mapstructure:"allowed_hosts"`
+	CryptoKeys    map[string]string `mapstructure:"crypto_keys"` // key_name -> path to PEM file
+	HTTPTimeout   time.Duration     `mapstructure:"http_timeout"`
+	KVTTLDefault  time.Duration     `mapstructure:"kv_ttl_default"`
+}
+
 // DefaultConfig returns sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
@@ -120,6 +132,7 @@ func DefaultConfig() *Config {
 				Pending:    "howk.pending",
 				Results:    "howk.results",
 				DeadLetter: "howk.deadletter",
+				Scripts:    "howk.scripts",
 			},
 			ConsumerGroup:          "howk-workers",
 			Retention:              7 * 24 * time.Hour, // 7 days
@@ -171,6 +184,15 @@ func DefaultConfig() *Config {
 			StatusTTL:       7 * 24 * time.Hour,
 			StatsTTL:        48 * time.Hour,
 			IdempotencyTTL:  24 * time.Hour,
+		},
+		Lua: LuaConfig{
+			Enabled:       false, // Feature flag - must be explicitly enabled
+			Timeout:       500 * time.Millisecond,
+			MemoryLimitMB: 50,
+			AllowedHosts:  []string{"*"}, // Allow all by default
+			CryptoKeys:    map[string]string{},
+			HTTPTimeout:   5 * time.Second,
+			KVTTLDefault:  24 * time.Hour,
 		},
 	}
 }
@@ -243,6 +265,7 @@ func bindEnvVariables(v *viper.Viper) error {
 		"kafka.topics.pending",
 		"kafka.topics.results",
 		"kafka.topics.deadletter",
+		"kafka.topics.scripts",
 		"kafka.consumer_group",
 		"kafka.retention",
 		"kafka.producer_batch_size",
@@ -289,6 +312,14 @@ func bindEnvVariables(v *viper.Viper) error {
 		"ttl.status_ttl",
 		"ttl.stats_ttl",
 		"ttl.idempotency_ttl",
+		// Lua
+		"lua.enabled",
+		"lua.timeout",
+		"lua.memory_limit_mb",
+		"lua.allowed_hosts",
+		"lua.crypto_keys",
+		"lua.http_timeout",
+		"lua.kv_ttl_default",
 	}
 
 	for _, key := range keys {

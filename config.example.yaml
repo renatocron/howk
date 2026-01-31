@@ -14,6 +14,7 @@ kafka:
     pending: howk.pending
     results: howk.results
     deadletter: howk.deadletter
+    scripts: howk.scripts
   consumer_group: howk-workers
   retention: 168h  # 7 days
   producer_batch_size: 16384
@@ -64,3 +65,17 @@ ttl:
   status_ttl: 168h           # Webhook status TTL (7 days)
   stats_ttl: 48h             # Statistics TTL
   idempotency_ttl: 24h       # Idempotency key TTL
+
+# Lua Script Engine configuration
+lua:
+  enabled: false             # Feature flag - must be explicitly enabled
+  timeout: 500ms             # Script execution timeout
+  memory_limit_mb: 50        # Memory limit per script execution
+  allowed_hosts:             # HTTP module hostname allowlist
+    - "*"                    # Allow all by default (use specific hosts in production)
+  crypto_keys:               # RSA private keys for credential decryption
+    # Example:
+    # PAYMENT_KEY: /etc/howk/keys/payment.pem
+    # API_KEY: /etc/howk/keys/api.pem
+  http_timeout: 5s           # Timeout for HTTP module requests
+  kv_ttl_default: 24h        # Default TTL for KV module storage

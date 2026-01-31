@@ -32,6 +32,9 @@ type Webhook struct {
 	MaxAttempts int       `json:"max_attempts"`
 	CreatedAt   time.Time `json:"created_at"`
 	ScheduledAt time.Time `json:"scheduled_at"`
+
+	// Script execution
+	ScriptHash string `json:"script_hash,omitempty"` // SHA256 of lua_code, indicates transformation expected
 }
 
 // DeliveryResult represents the outcome of a delivery attempt
@@ -142,6 +145,16 @@ const (
 
 	// DLQReasonUnrecoverable indicates an unrecoverable error (e.g., 4xx client error)
 	DLQReasonUnrecoverable DeadLetterReason = "unrecoverable"
+
+	// Script-related DLQ reasons
+	DLQReasonScriptDisabled      DeadLetterReason = "script_disabled"       // Script execution disabled but ScriptHash set
+	DLQReasonScriptNotFound      DeadLetterReason = "script_not_found"      // Script missing after sync timeout
+	DLQReasonScriptSyntaxError   DeadLetterReason = "script_syntax_error"   // Lua syntax error
+	DLQReasonScriptRuntimeError  DeadLetterReason = "script_runtime_error"  // Lua runtime error/panic
+	DLQReasonScriptTimeout       DeadLetterReason = "script_timeout"        // Script exceeded CPU timeout
+	DLQReasonScriptMemoryLimit   DeadLetterReason = "script_memory_limit"   // Script exceeded memory limit
+	DLQReasonCryptoKeyNotFound   DeadLetterReason = "crypto_key_not_found"  // Crypto key not configured
+	DLQReasonScriptInvalidOutput DeadLetterReason = "script_invalid_output" // Script produced invalid output
 )
 
 // DeadLetter represents a webhook that has been sent to the dead letter queue

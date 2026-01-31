@@ -27,6 +27,7 @@ internal/
   scheduler/   - Scheduler loop (poll Redis sorted set, re-enqueue)
   api/         - Gin HTTP server with enqueue and status endpoints
   reconciler/  - State rebuilder from Kafka replay
+  script/      - Lua scripting engine with kv, http, crypto modules
 ```
 
 ## Commands
@@ -106,7 +107,8 @@ make deps
 - **Every webhook** is a record in `howk.pending` topic
 - **Every delivery result** is a record in `howk.results` topic
 - **Exhausted retries** go to `howk.deadletter` topic
-- Retention: 7 days (configurable)
+- **Script configurations** are in `howk.scripts` topic (compacted)
+- Retention: 7 days (configurable, except scripts which are compacted)
 - If Redis dies, replay Kafka to rebuild state
 
 ### Redis as Hot State
@@ -167,10 +169,57 @@ Circuit HALF_OPEN: immediate (it's a probe)
 ### Data Flow
 
 1. **API** receives webhook → validates → batch produces to `howk.pending` → returns 202
-2. **Worker** consumes `howk.pending` → checks circuit → fires HTTP → produces `DeliveryResult` to `howk.results`
+2. **Worker** consumes `howk.pending` → checks circuit → **[OPTIONAL: executes Lua script]** → fires HTTP → produces `DeliveryResult` to `howk.results`
 3. If retry needed: Worker schedules retry in Redis sorted set
 4. **Scheduler** polls Redis sorted set → re-enqueues due webhooks to `howk.pending`
 5. **Results consumer** (part of worker) updates Redis state from `howk.results`
+
+### Lua Scripting Engine
+
+HOWK supports per-config payload transformation via sandboxed Lua scripts executed before HTTP delivery.
+
+**Topic**: `howk.scripts` (compacted topic)
+- **Key**: `config_id`
+- **Value**: `ScriptConfig` JSON (lua_code, hash, version, timestamps)
+- **Cleanup Policy**: compact (latest script per config)
+
+**Execution Flow**:
+1. API automatically sets `ScriptHash` on webhook if script exists for `config_id`
+2. Worker checks `webhook.ScriptHash` before delivery
+3. If present and `HOWK_LUA_ENABLED=true`: execute script to transform payload/headers
+4. If disabled but `ScriptHash` set: send to DLQ (prevents data leaks)
+
+**Script Modules**:
+- **kv**: Redis-backed storage with namespace isolation (`lua:kv:{config_id}:{key}`)
+  - `kv.get(key)`, `kv.set(key, value, ttl_secs)`, `kv.del(key)`
+- **http**: HTTP GET with allowlist and singleflight deduplication
+  - `http.get(url, headers_table)` returns `{status, body, headers}`
+- **crypto**: RSA-OAEP + AES-GCM credential decryption
+  - `crypto.decrypt_credential(key_name, symmetric_key_b64, encrypted_data_b64)`
+
+**Script Input/Output**:
+```lua
+-- Input (read-only globals)
+payload           -- string: raw JSON payload
+headers           -- table: HTTP headers
+metadata          -- table: {attempt, config_id, webhook_id, created_at}
+previous_error    -- table|nil: {status_code, error, attempt} on retries
+
+-- Output (write)
+request.body      -- string: override outgoing payload (can be binary)
+request.headers   -- table: additional/override headers
+config.opt_out_default_headers  -- bool: skip X-Webhook-* headers
+```
+
+**Security**:
+- Sandboxed (no `io`, `os`, `debug`, `package` modules)
+- CPU timeout: 500ms (default)
+- Memory limit: 50MB per execution
+- HTTP module enforces hostname allowlist
+
+**Feature Flag**: `HOWK_LUA_ENABLED` (default: false)
+- Must be explicitly enabled for script execution
+- If disabled but webhook has `ScriptHash`: → DLQ with reason `script_disabled`
 
 ## Key Domain Types
 
@@ -183,6 +232,7 @@ Circuit HALF_OPEN: immediate (it's a probe)
 - `Attempt`: Current attempt number (1-indexed)
 - `MaxAttempts`: Maximum retry attempts (default 20)
 - `ScheduledAt`: When this delivery should be attempted
+- `ScriptHash`: SHA256 of lua_code (indicates transformation expected)
 
 ### DeliveryResult
 - `Success`: Whether delivery succeeded (2xx status)
