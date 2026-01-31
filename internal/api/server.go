@@ -152,7 +152,7 @@ func (s *Server) readyCheck(c *gin.Context) {
 }
 
 func (s *Server) enqueueWebhook(c *gin.Context) {
-	tenantID := c.Param("tenant")
+	configID := c.Param("tenant")
 
 	var req EnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -160,7 +160,7 @@ func (s *Server) enqueueWebhook(c *gin.Context) {
 		return
 	}
 
-	webhook := s.buildWebhook(domain.TenantID(tenantID), &req)
+	webhook := s.buildWebhook(domain.ConfigID(configID), &req)
 
 	// Publish to Kafka
 	if err := s.publisher.PublishWebhook(c.Request.Context(), webhook); err != nil {
@@ -189,7 +189,7 @@ func (s *Server) enqueueWebhook(c *gin.Context) {
 }
 
 func (s *Server) enqueueWebhookBatch(c *gin.Context) {
-	tenantID := c.Param("tenant")
+	configID := c.Param("tenant")
 
 	var req BatchEnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -201,7 +201,7 @@ func (s *Server) enqueueWebhookBatch(c *gin.Context) {
 	var accepted, failed int
 
 	for _, webhookReq := range req.Webhooks {
-		webhook := s.buildWebhook(domain.TenantID(tenantID), &webhookReq)
+		webhook := s.buildWebhook(domain.ConfigID(configID), &webhookReq)
 
 		if err := s.publisher.PublishWebhook(c.Request.Context(), webhook); err != nil {
 			log.Error().Err(err).Str("webhook_id", string(webhook.ID)).Msg("Failed to enqueue webhook")
@@ -287,7 +287,7 @@ func (s *Server) getStats(c *gin.Context) {
 	})
 }
 
-func (s *Server) buildWebhook(tenantID domain.TenantID, req *EnqueueRequest) *domain.Webhook {
+func (s *Server) buildWebhook(configID domain.ConfigID, req *EnqueueRequest) *domain.Webhook {
 	maxAttempts := req.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 20 // Default
@@ -295,7 +295,7 @@ func (s *Server) buildWebhook(tenantID domain.TenantID, req *EnqueueRequest) *do
 
 	return &domain.Webhook{
 		ID:             domain.WebhookID("wh_" + ulid.Make().String()),
-		TenantID:       tenantID,
+		ConfigID:       configID,
 		Endpoint:       req.Endpoint,
 		EndpointHash:   domain.HashEndpoint(req.Endpoint),
 		Payload:        req.Payload,

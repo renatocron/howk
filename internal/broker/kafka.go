@@ -20,8 +20,8 @@ type KafkaBroker struct {
 	producer sarama.SyncProducer
 	client   sarama.Client
 
-	mu       sync.RWMutex
-	closed   bool
+	mu     sync.RWMutex
+	closed bool
 }
 
 // NewKafkaBroker creates a new Kafka broker
@@ -214,7 +214,7 @@ func (p *KafkaWebhookPublisher) PublishWebhook(ctx context.Context, webhook *dom
 		Key:   []byte(webhook.ID),
 		Value: data,
 		Headers: map[string]string{
-			"tenant_id":     string(webhook.TenantID),
+			"tenant_id":     string(webhook.ConfigID),
 			"endpoint_hash": string(webhook.EndpointHash),
 			"attempt":       fmt.Sprintf("%d", webhook.Attempt),
 		},
@@ -233,7 +233,7 @@ func (p *KafkaWebhookPublisher) PublishResult(ctx context.Context, result *domai
 		Key:   []byte(result.WebhookID),
 		Value: data,
 		Headers: map[string]string{
-			"tenant_id":     string(result.TenantID),
+			"tenant_id":     string(result.ConfigID),
 			"endpoint_hash": string(result.EndpointHash),
 			"success":       fmt.Sprintf("%t", result.Success),
 		},
@@ -264,7 +264,7 @@ func (p *KafkaWebhookPublisher) PublishDeadLetter(ctx context.Context, webhook *
 		Key:   []byte(webhook.ID),
 		Value: data,
 		Headers: map[string]string{
-			"tenant_id": string(webhook.TenantID),
+			"tenant_id": string(webhook.ConfigID),
 			"reason":    reason,
 		},
 	}

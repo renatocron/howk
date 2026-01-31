@@ -10,8 +10,8 @@ import (
 // WebhookID is a ULID-based unique identifier
 type WebhookID string
 
-// TenantID identifies the customer/tenant
-type TenantID string
+// ConfigID identifies the customer/tenant
+type ConfigID string
 
 // EndpointHash is a SHA256 hash of the endpoint URL (for circuit breaker keys)
 type EndpointHash string
@@ -19,7 +19,7 @@ type EndpointHash string
 // Webhook represents a webhook to be delivered
 type Webhook struct {
 	ID             WebhookID         `json:"id"`
-	TenantID       TenantID          `json:"tenant_id"`
+	ConfigID       ConfigID          `json:"tenant_id"`
 	Endpoint       string            `json:"endpoint"`
 	EndpointHash   EndpointHash      `json:"endpoint_hash"`
 	Payload        json.RawMessage   `json:"payload"`
@@ -37,7 +37,7 @@ type Webhook struct {
 // DeliveryResult represents the outcome of a delivery attempt
 type DeliveryResult struct {
 	WebhookID    WebhookID     `json:"webhook_id"`
-	TenantID     TenantID      `json:"tenant_id"`
+	ConfigID     ConfigID      `json:"tenant_id"`
 	Endpoint     string        `json:"endpoint"`
 	EndpointHash EndpointHash  `json:"endpoint_hash"`
 	Attempt      int           `json:"attempt"`
@@ -87,24 +87,24 @@ const (
 
 // CircuitBreaker represents the circuit breaker state for an endpoint
 type CircuitBreaker struct {
-	EndpointHash    EndpointHash `json:"endpoint_hash"`
-	State           CircuitState `json:"state"`
-	Failures        int          `json:"failures"`
-	Successes       int          `json:"successes"` // for half-open state
-	LastFailureAt   *time.Time   `json:"last_failure_at,omitempty"`
-	LastSuccessAt   *time.Time   `json:"last_success_at,omitempty"`
-	StateChangedAt  time.Time    `json:"state_changed_at"`
-	NextProbeAt     *time.Time   `json:"next_probe_at,omitempty"`
+	EndpointHash   EndpointHash `json:"endpoint_hash"`
+	State          CircuitState `json:"state"`
+	Failures       int          `json:"failures"`
+	Successes      int          `json:"successes"` // for half-open state
+	LastFailureAt  *time.Time   `json:"last_failure_at,omitempty"`
+	LastSuccessAt  *time.Time   `json:"last_success_at,omitempty"`
+	StateChangedAt time.Time    `json:"state_changed_at"`
+	NextProbeAt    *time.Time   `json:"next_probe_at,omitempty"`
 }
 
 // Stats represents aggregated statistics
 type Stats struct {
-	Period           string `json:"period"`
-	Enqueued         int64  `json:"enqueued"`
-	Delivered        int64  `json:"delivered"`
-	Failed           int64  `json:"failed"`
-	Exhausted        int64  `json:"exhausted"`
-	UniqueEndpoints  int64  `json:"unique_endpoints"`
+	Period          string `json:"period"`
+	Enqueued        int64  `json:"enqueued"`
+	Delivered       int64  `json:"delivered"`
+	Failed          int64  `json:"failed"`
+	Exhausted       int64  `json:"exhausted"`
+	UniqueEndpoints int64  `json:"unique_endpoints"`
 }
 
 // HashEndpoint creates a consistent hash for an endpoint URL

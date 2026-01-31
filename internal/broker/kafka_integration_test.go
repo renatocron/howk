@@ -103,7 +103,7 @@ func TestPublishWebhook_Serialization(t *testing.T) {
 		Key:   []byte(webhook.ID),
 		Value: data,
 		Headers: map[string]string{
-			"tenant_id":     string(webhook.TenantID),
+			"tenant_id":     string(webhook.ConfigID),
 			"endpoint_hash": string(webhook.EndpointHash),
 			"attempt":       "1",
 		},
@@ -116,7 +116,7 @@ func TestPublishWebhook_Serialization(t *testing.T) {
 	select {
 	case wh := <-received:
 		assert.Equal(t, webhook.ID, wh.ID)
-		assert.Equal(t, webhook.TenantID, wh.TenantID)
+		assert.Equal(t, webhook.ConfigID, wh.ConfigID)
 		assert.Equal(t, webhook.Endpoint, wh.Endpoint)
 		assert.Equal(t, webhook.EndpointHash, wh.EndpointHash)
 	case <-time.After(10 * time.Second):
@@ -151,7 +151,7 @@ func TestPublishResult_Headers(t *testing.T) {
 	// Create and publish delivery result
 	result := &domain.DeliveryResult{
 		WebhookID:    "wh_test_result",
-		TenantID:     "test-tenant",
+		ConfigID:     "test-tenant",
 		EndpointHash: "test-hash",
 		Success:      true,
 		StatusCode:   200,
@@ -165,7 +165,7 @@ func TestPublishResult_Headers(t *testing.T) {
 		Key:   []byte(result.WebhookID),
 		Value: data,
 		Headers: map[string]string{
-			"tenant_id":     string(result.TenantID),
+			"tenant_id":     string(result.ConfigID),
 			"endpoint_hash": string(result.EndpointHash),
 			"success":       "true",
 		},
@@ -320,4 +320,3 @@ func TestConsumerGroupRebalancing(t *testing.T) {
 	t.Logf("Consumer 1 received: %d, Consumer 2 received: %d", count1, count2)
 	assert.Equal(t, 10, count1+count2, "total messages should be 10")
 }
-

@@ -68,7 +68,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 
 	logger := log.With().
 		Str("webhook_id", string(webhook.ID)).
-		Str("tenant_id", string(webhook.TenantID)).
+		Str("tenant_id", string(webhook.ConfigID)).
 		Str("endpoint_hash", string(webhook.EndpointHash)).
 		Int("attempt", webhook.Attempt).
 		Logger()
@@ -107,7 +107,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 	// Build delivery result
 	deliveryResult := &domain.DeliveryResult{
 		WebhookID:    webhook.ID,
-		TenantID:     webhook.TenantID,
+		ConfigID:     webhook.ConfigID,
 		Endpoint:     webhook.Endpoint,
 		EndpointHash: webhook.EndpointHash,
 		Attempt:      webhook.Attempt,

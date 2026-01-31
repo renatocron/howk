@@ -259,12 +259,12 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 
 	w := worker.NewWorker(
 		cfg,
-		mockBroker, // Passed as broker.Broker interface
-		mockPublisher, // Passed as broker.WebhookPublisher interface
-		mockHotState,  // Passed as hotstate.HotState interface
+		mockBroker,         // Passed as broker.Broker interface
+		mockPublisher,      // Passed as broker.WebhookPublisher interface
+		mockHotState,       // Passed as hotstate.HotState interface
 		mockCircuitBreaker, // Passed as hotstate.CircuitBreakerChecker interface
 		mockDeliveryClient, // Passed as delivery.Deliverer interface
-		mockRetryStrategy, // Passed as retry.Retrier interface
+		mockRetryStrategy,  // Passed as retry.Retrier interface
 	)
 
 	return w, mockBroker, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy
