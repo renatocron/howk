@@ -30,10 +30,12 @@ func SetupRedisWithConfig(t *testing.T, cfg config.RedisConfig) *hotstate.RedisH
         t.Skip("skipping integration test in short mode")
     }
 
-    // Use default circuit breaker config for tests
-    cbConfig := config.DefaultConfig().CircuitBreaker
+    // Use default config values for tests
+    defaultCfg := config.DefaultConfig()
+    cbConfig := defaultCfg.CircuitBreaker
+    ttlConfig := defaultCfg.TTL
 
-    hs, err := hotstate.NewRedisHotState(cfg, cbConfig)
+    hs, err := hotstate.NewRedisHotState(cfg, cbConfig, ttlConfig)
     if err != nil {
         t.Fatalf("failed to connect to redis: %v", err)
     }

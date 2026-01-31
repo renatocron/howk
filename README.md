@@ -145,19 +145,57 @@ curl -X POST http://localhost:8080/webhooks/tenant123/enqueue \
 
 ## Configuration
 
+HOWK supports flexible configuration through:
+
+1. **Environment Variables** (highest priority) - `HOWK_*` prefixed
+2. **Config File** (YAML format) - specified via `--config` flag or auto-discovered
+3. **Defaults** (lowest priority) - sensible built-in defaults
+
+### Environment Variables
+
+Override any configuration setting using environment variables with the `HOWK_` prefix:
+
+```bash
+export HOWK_API_PORT=9090
+export HOWK_KAFKA_BROKERS=kafka1:9092,kafka2:9092
+export HOWK_REDIS_ADDR=redis.example.com:6379
+export HOWK_REDIS_PASSWORD=secret
+export HOWK_TTL_STATUS_TTL=72h
+bin/howk-api
+```
+
+See `.env.example` for a complete list of environment variables.
+
+### Config File
+
+Use a YAML config file for complex configurations:
+
+```bash
+bin/howk-api --config=/etc/howk/config.yaml
+```
+
+Example `config.yaml`:
+
 ```yaml
-# config.yaml
+api:
+  port: 8080
+  read_timeout: 10s
+  write_timeout: 10s
+
 kafka:
-  brokers: ["localhost:9092"]
+  brokers:
+    - localhost:19092
   topics:
     pending: howk.pending
     results: howk.results
     deadletter: howk.deadletter
   consumer_group: howk-workers
-  retention: 168h  # 7 days
+  retention: 168h
 
 redis:
   addr: "localhost:6379"
+  password: ""
+  pool_size: 100
 
 delivery:
   timeout: 30s
@@ -171,11 +209,33 @@ retry:
   jitter: 0.2
 
 circuit_breaker:
-  failure_threshold: 5        # failures before OPEN
-  failure_window: 60s         # window for counting failures
-  recovery_timeout: 300s      # time before HALF_OPEN
-  probe_interval: 60s         # time between probes in HALF_OPEN
-  success_threshold: 2        # successes in HALF_OPEN before CLOSED
+  failure_threshold: 5
+  failure_window: 60s
+  recovery_timeout: 5m
+  probe_interval: 60s
+  success_threshold: 2
+
+scheduler:
+  poll_interval: 1s
+  batch_size: 500
+
+ttl:
+  circuit_state_ttl: 24h
+  status_ttl: 168h
+  stats_ttl: 48h
+  idempotency_ttl: 24h
+```
+
+### Configuration Precedence
+
+Environment variables override config file settings, which override defaults:
+
+```bash
+# config.yaml has: api.port: 7070
+# Environment variable overrides it:
+export HOWK_API_PORT=9090
+bin/howk-api --config=config.yaml
+# Result: API listens on port 9090
 ```
 
 ## API

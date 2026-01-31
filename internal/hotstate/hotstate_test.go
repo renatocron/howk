@@ -22,6 +22,13 @@ var defaultCircuitConfig = config.CircuitBreakerConfig{
 	SuccessThreshold: 2,
 }
 
+var defaultTTLConfig = config.TTLConfig{
+	CircuitStateTTL: 24 * time.Hour,
+	StatusTTL:       7 * 24 * time.Hour,
+	StatsTTL:        48 * time.Hour,
+	IdempotencyTTL:  24 * time.Hour,
+}
+
 func newMockedHotState(t *testing.T, cfg config.CircuitBreakerConfig) (*RedisHotState, redismock.ClientMock) {
 	t.Helper()
 
@@ -29,6 +36,7 @@ func newMockedHotState(t *testing.T, cfg config.CircuitBreakerConfig) (*RedisHot
 	hotState := &RedisHotState{
 		rdb:           client,
 		circuitConfig: cfg,
+		ttlConfig:     defaultTTLConfig,
 	}
 
 	return hotState, mock

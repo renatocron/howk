@@ -198,14 +198,100 @@ Circuit HALF_OPEN: immediate (it's a probe)
 
 ## Configuration
 
-Configuration is loaded via `config.DefaultConfig()` with sensible defaults. Key settings:
+Configuration is loaded via `config.LoadConfig()` with support for multiple sources, prioritized in this order:
 
-- **Kafka**: Brokers, topics, consumer group, retention, compression (snappy)
-- **Redis**: Address, pool size, timeouts
-- **Delivery**: HTTP timeout (30s), connection pooling
+1. **Environment variables** (highest priority) - HOWK_ prefixed
+2. **Config file** (YAML format) - `config.yaml` or specified via `--config` flag
+3. **Defaults** (lowest priority) - built-in sensible defaults
+
+### Configuration Loading
+
+All HOWK components support the `--config` flag to specify a config file path:
+
+```bash
+bin/howk-api --config=/etc/howk/config.yaml
+bin/howk-worker --config=config.yaml
+bin/howk-scheduler --config=/path/to/config.yaml
+bin/howk-reconciler --config=config.yaml --from-beginning
+```
+
+If no config file is specified, HOWK searches in these locations:
+- Current directory (`.`)
+- Home directory (`~/.howk/`)
+- System config directory (`/etc/howk/`)
+
+### Environment Variables
+
+All configuration can be overridden via environment variables with the `HOWK_` prefix, using nested structure with underscores. Examples:
+
+- `HOWK_API_PORT=9090` - Override API port
+- `HOWK_KAFKA_BROKERS=kafka1:9092,kafka2:9092` - Override Kafka brokers
+- `HOWK_REDIS_ADDR=redis.example.com:6379` - Override Redis address
+- `HOWK_REDIS_PASSWORD=secret` - Set Redis password
+- `HOWK_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3` - Override circuit breaker threshold
+- `HOWK_TTL_STATUS_TTL=72h` - Override webhook status TTL
+
+See `.env.example` for a complete list of supported environment variables.
+
+### Configuration File Format
+
+Configuration files use YAML format. See `config.example.yaml` for a complete example:
+
+```yaml
+api:
+  port: 8080
+  read_timeout: 10s
+  write_timeout: 10s
+
+kafka:
+  brokers:
+    - localhost:19092
+  topics:
+    pending: howk.pending
+    results: howk.results
+    deadletter: howk.deadletter
+  consumer_group: howk-workers
+
+redis:
+  addr: localhost:6379
+  password: ""
+  pool_size: 100
+
+delivery:
+  timeout: 30s
+  max_idle_conns: 100
+
+retry:
+  base_delay: 10s
+  max_delay: 24h
+  max_attempts: 20
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout: 5m
+
+scheduler:
+  poll_interval: 1s
+  batch_size: 500
+
+ttl:
+  circuit_state_ttl: 24h
+  status_ttl: 168h
+  stats_ttl: 48h
+  idempotency_ttl: 24h
+```
+
+### Default Values
+
+Key settings with defaults:
+
+- **Kafka**: Brokers (`localhost:9092`), consumer group (`howk-workers`), topics, retention (7 days), compression (snappy)
+- **Redis**: Address (`localhost:6379`), pool size (100), timeouts (3-5 seconds)
+- **API**: Port (8080), timeouts (10s), max request size (1MB)
+- **Delivery**: HTTP timeout (30s), connection pooling (100 max idle)
 - **Retry**: Base delay (10s), max delay (24h), max attempts (20), jitter (0.2)
 - **Circuit Breaker**: Failure threshold (5), recovery timeout (5m), success threshold (2)
-- **Scheduler**: Poll interval (1s), batch size (500)
+- **TTL**: Circuit state (24h), webhook status (7 days), stats (48h), idempotency (24h)
 
 ## Recovery Scenarios
 

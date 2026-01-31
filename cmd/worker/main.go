@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,12 +20,19 @@ import (
 )
 
 func main() {
+	// Parse command-line flags
+	configPath := flag.String("config", "", "Path to config file (optional)")
+	flag.Parse()
+
 	// Setup logging
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
 	// Load config
-	cfg := config.DefaultConfig()
+	cfg, err := config.LoadConfig(*configPath)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to load configuration")
+	}
 
 	// Setup context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -45,14 +53,14 @@ func main() {
 	publisher := broker.NewKafkaWebhookPublisher(kafkaBroker, cfg.Kafka.Topics)
 
 	// Initialize Redis hot state
-	hs, err := hotstate.NewRedisHotState(cfg.Redis, cfg.CircuitBreaker)
+	hs, err := hotstate.NewRedisHotState(cfg.Redis, cfg.CircuitBreaker, cfg.TTL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Redis hot state")
 	}
 	defer hs.Close()
 
 	// Initialize circuit breaker
-	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker)
+	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 
 	// Initialize delivery client
 	dc := delivery.NewClient(cfg.Delivery)

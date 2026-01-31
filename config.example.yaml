@@ -57,3 +57,10 @@ scheduler:
   poll_interval: 1s
   batch_size: 500
   lock_timeout: 30s
+
+# TTL configuration for Redis keys
+ttl:
+  circuit_state_ttl: 24h     # Circuit breaker state TTL
+  status_ttl: 168h           # Webhook status TTL (7 days)
+  stats_ttl: 48h             # Statistics TTL
+  idempotency_ttl: 24h       # Idempotency key TTL

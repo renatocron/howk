@@ -18,6 +18,7 @@ import (
 func main() {
 	// Parse flags
 	fromBeginning := flag.Bool("from-beginning", false, "Start reconciliation from the beginning of the Kafka topic")
+	configPath := flag.String("config", "", "Path to config file (optional)")
 	flag.Parse()
 
 	// Setup logging
@@ -25,7 +26,10 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
 	// Load config
-	cfg := config.DefaultConfig()
+	cfg, err := config.LoadConfig(*configPath)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to load configuration")
+	}
 
 	// Setup context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -41,7 +45,7 @@ func main() {
 	}()
 
 	// Initialize Redis hot state
-	hs, err := hotstate.NewRedisHotState(cfg.Redis, cfg.CircuitBreaker)
+	hs, err := hotstate.NewRedisHotState(cfg.Redis, cfg.CircuitBreaker, cfg.TTL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Redis hot state")
 	}

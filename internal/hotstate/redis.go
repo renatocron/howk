@@ -24,13 +24,14 @@ const (
 
 // RedisHotState implements HotState using Redis
 type RedisHotState struct {
-	rdb          *redis.Client
-	config       config.RedisConfig
-	circuitConfig config.CircuitBreakerConfig // Added for circuit breaker logic
+	rdb           *redis.Client
+	config        config.RedisConfig
+	circuitConfig config.CircuitBreakerConfig
+	ttlConfig     config.TTLConfig
 }
 
 // NewRedisHotState creates a new Redis-backed hot state
-func NewRedisHotState(cfg config.RedisConfig, cbConfig config.CircuitBreakerConfig) (*RedisHotState, error) {
+func NewRedisHotState(cfg config.RedisConfig, cbConfig config.CircuitBreakerConfig, ttlConfig config.TTLConfig) (*RedisHotState, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         cfg.Addr,
 		Password:     cfg.Password,
@@ -51,9 +52,10 @@ func NewRedisHotState(cfg config.RedisConfig, cbConfig config.CircuitBreakerConf
 	}
 
 	return &RedisHotState{
-		rdb:    rdb,
-		config: cfg,
+		rdb:           rdb,
+		config:        cfg,
 		circuitConfig: cbConfig,
+		ttlConfig:     ttlConfig,
 	}, nil
 }
 
@@ -94,9 +96,9 @@ func (r *RedisHotState) UpdateCircuit(ctx context.Context, cb *domain.CircuitBre
 	}
 
 	// Calculate TTL for circuit state
-	ttl := 24 * time.Hour // Default
+	ttl := r.ttlConfig.CircuitStateTTL
 	if cb.State == domain.CircuitClosed && cb.Failures == 0 {
-		ttl = 2 * r.circuitConfig.RecoveryTimeout // Use configured recovery timeout
+		ttl = 2 * r.circuitConfig.RecoveryTimeout
 	}
 
 	return r.rdb.Set(ctx, r.circuitKey(cb.EndpointHash), data, ttl).Err()
@@ -211,8 +213,7 @@ func (r *RedisHotState) SetStatus(ctx context.Context, status *domain.WebhookSta
 		return fmt.Errorf("marshal status: %w", err)
 	}
 
-	// Status expires after 7 days
-	return r.rdb.Set(ctx, key, data, 7*24*time.Hour).Err()
+	return r.rdb.Set(ctx, key, data, r.ttlConfig.StatusTTL).Err()
 }
 
 func (r *RedisHotState) GetStatus(ctx context.Context, webhookID domain.WebhookID) (*domain.WebhookStatus, error) {
@@ -289,8 +290,7 @@ func (r *RedisHotState) IncrStats(ctx context.Context, bucket string, counters m
 	for name, delta := range counters {
 		key := statsPrefix + name + ":" + bucket
 		pipe.IncrBy(ctx, key, delta)
-		// Expire after 48 hours
-		pipe.Expire(ctx, key, 48*time.Hour)
+		pipe.Expire(ctx, key, r.ttlConfig.StatsTTL)
 	}
 
 	_, err := pipe.Exec(ctx)
@@ -310,7 +310,7 @@ func (r *RedisHotState) AddToHLL(ctx context.Context, key string, values ...stri
 
 	pipe := r.rdb.Pipeline()
 	pipe.PFAdd(ctx, fullKey, args...)
-	pipe.Expire(ctx, fullKey, 48*time.Hour)
+	pipe.Expire(ctx, fullKey, r.ttlConfig.StatsTTL)
 	_, err := pipe.Exec(ctx)
 	return err
 }

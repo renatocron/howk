@@ -35,3 +35,4 @@ config.yaml
 # Local development
 .env
 .env.local
+.env.*.local

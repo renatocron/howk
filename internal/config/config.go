@@ -1,8 +1,22 @@
 package config
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/spf13/viper"
 )
+
+// TTLConfig configures TTLs for various Redis keys
+type TTLConfig struct {
+	CircuitStateTTL time.Duration `mapstructure:"circuit_state_ttl"`
+	StatusTTL       time.Duration `mapstructure:"status_ttl"`
+	StatsTTL        time.Duration `mapstructure:"stats_ttl"`
+	IdempotencyTTL  time.Duration `mapstructure:"idempotency_ttl"`
+}
 
 // Config is the root configuration
 type Config struct {
@@ -13,6 +27,7 @@ type Config struct {
 	Retry          RetryConfig          `mapstructure:"retry"`
 	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
 	Scheduler      SchedulerConfig      `mapstructure:"scheduler"`
+	TTL            TTLConfig            `mapstructure:"ttl"`
 }
 
 type APIConfig struct {
@@ -151,5 +166,136 @@ func DefaultConfig() *Config {
 			BatchSize:    500,
 			LockTimeout:  30 * time.Second,
 		},
+		TTL: TTLConfig{
+			CircuitStateTTL: 24 * time.Hour,
+			StatusTTL:       7 * 24 * time.Hour,
+			StatsTTL:        48 * time.Hour,
+			IdempotencyTTL:  24 * time.Hour,
+		},
 	}
+}
+
+// LoadConfig loads configuration from environment variables, config file, and defaults
+// Priority: environment variables > config file > defaults
+func LoadConfig(configPath string) (*Config, error) {
+	// Start with defaults
+	cfg := DefaultConfig()
+
+	v := viper.New()
+
+	// Set environment variable prefix and key replacer
+	v.SetEnvPrefix("HOWK")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Search for config file in multiple locations if path not provided
+	if configPath == "" {
+		v.AddConfigPath(".")
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			v.AddConfigPath(filepath.Join(homeDir, ".howk"))
+		}
+		v.AddConfigPath("/etc/howk")
+		v.SetConfigName("config")
+		v.SetConfigType("yaml")
+
+		// Try to read config file (non-fatal if missing)
+		if err := v.ReadInConfig(); err != nil {
+			// Only log if it's not a "not found" error
+			if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+				return nil, fmt.Errorf("error reading config file: %w", err)
+			}
+			// Config file not found is OK, we'll use defaults + env vars
+		}
+	} else {
+		// Use provided config file path
+		v.SetConfigFile(configPath)
+		if err := v.ReadInConfig(); err != nil {
+			return nil, fmt.Errorf("error reading config file %s: %w", configPath, err)
+		}
+	}
+
+	// Enable reading from environment variables
+	v.AutomaticEnv()
+
+	// Explicitly bind all environment variables
+	if err := bindEnvVariables(v); err != nil {
+		return nil, err
+	}
+
+	// Unmarshal config, with defaults as fallback
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("error unmarshalling config: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// bindEnvVariables explicitly binds all configuration keys to environment variables
+func bindEnvVariables(v *viper.Viper) error {
+	keys := []string{
+		// API
+		"api.port",
+		"api.read_timeout",
+		"api.write_timeout",
+		"api.max_request_size",
+		// Kafka
+		"kafka.brokers",
+		"kafka.topics.pending",
+		"kafka.topics.results",
+		"kafka.topics.deadletter",
+		"kafka.consumer_group",
+		"kafka.retention",
+		"kafka.producer_batch_size",
+		"kafka.producer_linger_ms",
+		"kafka.producer_compression",
+		"kafka.consumer_fetch_min_bytes",
+		"kafka.consumer_fetch_max_wait",
+		"kafka.group_session_timeout",
+		"kafka.group_heartbeat_interval",
+		"kafka.group_rebalance_timeout",
+		// Redis
+		"redis.addr",
+		"redis.password",
+		"redis.db",
+		"redis.pool_size",
+		"redis.min_idle_conns",
+		"redis.dial_timeout",
+		"redis.read_timeout",
+		"redis.write_timeout",
+		// Delivery
+		"delivery.timeout",
+		"delivery.max_idle_conns",
+		"delivery.max_conns_per_host",
+		"delivery.idle_conn_timeout",
+		"delivery.tls_handshake_timeout",
+		"delivery.user_agent",
+		// Retry
+		"retry.base_delay",
+		"retry.max_delay",
+		"retry.max_attempts",
+		"retry.jitter",
+		// Circuit Breaker
+		"circuit_breaker.failure_threshold",
+		"circuit_breaker.failure_window",
+		"circuit_breaker.recovery_timeout",
+		"circuit_breaker.probe_interval",
+		"circuit_breaker.success_threshold",
+		// Scheduler
+		"scheduler.poll_interval",
+		"scheduler.batch_size",
+		"scheduler.lock_timeout",
+		// TTL
+		"ttl.circuit_state_ttl",
+		"ttl.status_ttl",
+		"ttl.stats_ttl",
+		"ttl.idempotency_ttl",
+	}
+
+	for _, key := range keys {
+		if err := v.BindEnv(key); err != nil {
+			return fmt.Errorf("error binding env var for key %s: %w", key, err)
+		}
+	}
+
+	return nil
 }

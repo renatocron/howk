@@ -39,7 +39,7 @@ func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker,
 	b := testutil.SetupKafka(t)
 
 	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker)
+	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
 
@@ -193,7 +193,7 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	b := testutil.SetupKafka(t)
 
 	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker)
+	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
 
@@ -327,7 +327,7 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 	b := testutil.SetupKafka(t)
 
 	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker)
+	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
 

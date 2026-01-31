@@ -18,17 +18,19 @@ const (
 
 // Breaker implements circuit breaker logic with Redis storage
 type Breaker struct {
-	rdb    *redis.Client
-	config config.CircuitBreakerConfig
-	now    func() time.Time
+	rdb       *redis.Client
+	config    config.CircuitBreakerConfig
+	ttlConfig config.TTLConfig
+	now       func() time.Time
 }
 
 // NewBreaker creates a new circuit breaker
-func NewBreaker(rdb *redis.Client, cfg config.CircuitBreakerConfig) *Breaker {
+func NewBreaker(rdb *redis.Client, cfg config.CircuitBreakerConfig, ttlCfg config.TTLConfig) *Breaker {
 	return &Breaker{
-		rdb:    rdb,
-		config: cfg,
-		now:    time.Now,
+		rdb:       rdb,
+		config:    cfg,
+		ttlConfig: ttlCfg,
+		now:       time.Now,
 	}
 }
 
@@ -277,9 +279,8 @@ func (b *Breaker) save(ctx context.Context, cb *domain.CircuitBreaker) error {
 		return err
 	}
 
-	// Expire circuit state after 2x recovery timeout if closed
-	// Keep longer if open/half-open
-	ttl := 24 * time.Hour
+	// Expire circuit state based on configuration
+	ttl := b.ttlConfig.CircuitStateTTL
 	if cb.State == domain.CircuitClosed && cb.Failures == 0 {
 		ttl = 2 * b.config.RecoveryTimeout
 	}
@@ -293,7 +294,7 @@ func (b *Breaker) saveWithTx(ctx context.Context, tx *redis.Tx, cb *domain.Circu
 		return err
 	}
 
-	ttl := 24 * time.Hour
+	ttl := b.ttlConfig.CircuitStateTTL
 	if cb.State == domain.CircuitClosed && cb.Failures == 0 {
 		ttl = 2 * b.config.RecoveryTimeout
 	}

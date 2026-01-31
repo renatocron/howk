@@ -14,7 +14,8 @@
       "Bash(gh run view:*)",
       "Bash(go build:*)",
       "Bash(ls:*)",
-      "Bash(TEST_KAFKA_BROKERS=localhost:19092 go test:*)"
+      "Bash(TEST_KAFKA_BROKERS=localhost:19092 go test:*)",
+      "Bash(go mod tidy:*)"
     ]
   }
 }

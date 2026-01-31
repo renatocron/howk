@@ -73,7 +73,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 		Logger()
 
 	// Check idempotency - have we already processed this exact attempt?
-	isFirstTime, err := w.hotstate.CheckAndSetProcessed(ctx, webhook.ID, webhook.Attempt, 24*time.Hour)
+	isFirstTime, err := w.hotstate.CheckAndSetProcessed(ctx, webhook.ID, webhook.Attempt, w.config.TTL.IdempotencyTTL)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Idempotency check failed, proceeding anyway")
 	} else if !isFirstTime {
@@ -294,11 +294,11 @@ func (w *Worker) recordStats(ctx context.Context, stat string, webhook *domain.W
 		// Batch both operations
 		statsKey := fmt.Sprintf("stats:%s:%s", stat, bucket)
 		pipe.IncrBy(ctx, statsKey, 1)
-		pipe.Expire(ctx, statsKey, 48*time.Hour)
+		pipe.Expire(ctx, statsKey, w.config.TTL.StatsTTL)
 
 		hllKey := fmt.Sprintf("hll:endpoints:%s", bucket)
 		pipe.PFAdd(ctx, hllKey, string(webhook.EndpointHash))
-		pipe.Expire(ctx, hllKey, 48*time.Hour)
+		pipe.Expire(ctx, hllKey, w.config.TTL.StatsTTL)
 
 		if _, err := pipe.Exec(ctx); err != nil {
 			log.Warn().Err(err).Msg("Failed to record stats")

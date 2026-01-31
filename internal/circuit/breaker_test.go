@@ -26,7 +26,8 @@ func setupBreaker(t *testing.T) (*circuit.Breaker, *time.Time) {
 		FailureWindow:    10 * time.Second,
 		ProbeInterval:    50 * time.Millisecond,
 	}
-	breaker := circuit.NewBreaker(rdb, cfg)
+	ttlCfg := config.DefaultConfig().TTL
+	breaker := circuit.NewBreaker(rdb, cfg, ttlCfg)
 
 	now := time.Now()
 	breaker.SetNowFunc(func() time.Time {
