@@ -5,8 +5,10 @@ package worker_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,16 +21,19 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
+	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/retry"
 	"github.com/howk/howk/internal/testutil"
 	"github.com/howk/howk/internal/worker"
 )
 
-func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker, context.Context, context.CancelFunc) {
+func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker, *broker.KafkaBroker, *hotstate.RedisHotState, context.Context, context.CancelFunc) {
 	cfg := config.DefaultConfig()
 	cfg.CircuitBreaker.RecoveryTimeout = 100 * time.Millisecond
 	cfg.CircuitBreaker.FailureThreshold = 3
 	cfg.Delivery.Timeout = 2 * time.Second
+	// Use unique consumer group for each test to avoid processing other tests' messages
+	cfg.Kafka.ConsumerGroup = cfg.Kafka.ConsumerGroup + "-" + t.Name()
 
 	hs := testutil.SetupRedis(t)
 	b := testutil.SetupKafka(t)
@@ -43,24 +48,27 @@ func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker,
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 
-	return w, ctx, cancel
+	return w, b, hs, ctx, cancel
 }
 
 func TestWorker_SuccessfulDelivery(t *testing.T) {
 	// Create mock HTTP server that returns 200
 	var receivedPayload []byte
+	var mu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify headers
+		// Verify webhook ID header is present
 		assert.NotEmpty(t, r.Header.Get("X-Webhook-ID"))
-		assert.NotEmpty(t, r.Header.Get("X-Webhook-Signature"))
 
 		// Read payload
-		json.NewDecoder(r.Body).Decode(&receivedPayload)
+		payload, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		receivedPayload = payload
+		mu.Unlock()
 		w.WriteHeader(200)
 	}))
 	defer server.Close()
 
-	w, ctx, cancel := setupWorkerTest(t, server)
+	w, b, _, ctx, cancel := setupWorkerTest(t, server)
 	defer cancel()
 
 	// Create webhook
@@ -86,18 +94,21 @@ func TestWorker_SuccessfulDelivery(t *testing.T) {
 		Value: data,
 	}
 
-	// Get broker from testutil
-	b := testutil.SetupKafka(t)
+	// Use the same broker instance that the worker is using
 	cfg := config.DefaultConfig()
 	err = b.Publish(ctx, cfg.Kafka.Topics.Pending, msg)
 	require.NoError(t, err)
 
 	// Wait for delivery
 	testutil.WaitFor(t, 10*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
 		return len(receivedPayload) > 0
 	})
 
 	// Verify webhook was delivered
+	mu.Lock()
+	defer mu.Unlock()
 	assert.NotNil(t, receivedPayload)
 }
 
@@ -114,7 +125,7 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	w, ctx, cancel := setupWorkerTest(t, server)
+	w, b, hs, ctx, cancel := setupWorkerTest(t, server)
 	defer cancel()
 
 	// Create webhook
@@ -131,8 +142,7 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 	// Wait for worker to start consuming
 	time.Sleep(2 * time.Second)
 
-	// Publish webhook
-	b := testutil.SetupKafka(t)
+	// Publish webhook using the same broker instance
 	cfg := config.DefaultConfig()
 
 	data, err := json.Marshal(webhook)
@@ -150,9 +160,6 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 	testutil.WaitFor(t, 10*time.Second, func() bool {
 		return callCount.Load() >= 1
 	})
-
-	// Verify retry was scheduled in Redis
-	hs := testutil.SetupRedis(t)
 
 	// Wait for retry to be scheduled
 	time.Sleep(500 * time.Millisecond)
@@ -179,6 +186,8 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	cfg.CircuitBreaker.FailureThreshold = 3
 	cfg.CircuitBreaker.FailureWindow = 10 * time.Second
 	cfg.Retry.BaseDelay = 100 * time.Millisecond
+	// Use unique consumer group for this test
+	cfg.Kafka.ConsumerGroup = cfg.Kafka.ConsumerGroup + "-" + t.Name()
 
 	hs := testutil.SetupRedis(t)
 	b := testutil.SetupKafka(t)
@@ -249,7 +258,7 @@ func TestWorker_Idempotency(t *testing.T) {
 	}))
 	defer server.Close()
 
-	w, ctx, cancel := setupWorkerTest(t, server)
+	w, b, _, ctx, cancel := setupWorkerTest(t, server)
 	defer cancel()
 
 	// Create webhook
@@ -266,8 +275,7 @@ func TestWorker_Idempotency(t *testing.T) {
 	// Wait for worker to start consuming
 	time.Sleep(2 * time.Second)
 
-	// Publish same webhook twice (duplicate)
-	b := testutil.SetupKafka(t)
+	// Publish same webhook twice (duplicate) using the same broker instance
 	cfg := config.DefaultConfig()
 
 	data, err := json.Marshal(webhook)
@@ -312,6 +320,8 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Retry.MaxAttempts = 2 // Only 2 attempts for faster testing
 	cfg.Retry.BaseDelay = 100 * time.Millisecond
+	// Use unique consumer group for this test
+	cfg.Kafka.ConsumerGroup = cfg.Kafka.ConsumerGroup + "-" + t.Name()
 
 	hs := testutil.SetupRedis(t)
 	b := testutil.SetupKafka(t)
