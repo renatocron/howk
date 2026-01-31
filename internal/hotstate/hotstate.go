@@ -42,6 +42,9 @@ type HotState interface {
 	Ping(ctx context.Context) error
 	FlushForRebuild(ctx context.Context) error
 	Close() error
+
+	// Redis client access for advanced operations
+	Client() interface{}
 }
 
 // CircuitBreakerChecker is a subset of HotState for circuit checking

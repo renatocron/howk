@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
@@ -73,10 +74,10 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 		Logger()
 
 	// Check idempotency - have we already processed this exact attempt?
-	alreadyProcessed, err := w.hotstate.CheckAndSetProcessed(ctx, webhook.ID, webhook.Attempt, 24*time.Hour)
+	isFirstTime, err := w.hotstate.CheckAndSetProcessed(ctx, webhook.ID, webhook.Attempt, 24*time.Hour)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Idempotency check failed, proceeding anyway")
-	} else if !alreadyProcessed {
+	} else if !isFirstTime {
 		logger.Debug().Msg("Already processed, skipping")
 		return nil
 	}
@@ -265,14 +266,36 @@ func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, stat
 func (w *Worker) recordStats(ctx context.Context, stat string, webhook *domain.Webhook) {
 	bucket := time.Now().Format("2006010215") // hourly bucket
 
-	// Increment counter
-	if err := w.hotstate.IncrStats(ctx, bucket, map[string]int64{stat: 1}); err != nil {
-		log.Warn().Err(err).Msg("Failed to increment stats")
-	}
+	// Use Redis pipelining for better performance
+	// This is the production/integration test path
+	if client, ok := w.hotstate.Client().(*redis.Client); ok && client != nil {
+		pipe := client.Pipeline()
 
-	// Add to HLL for unique endpoints
-	if err := w.hotstate.AddToHLL(ctx, "endpoints:"+bucket, string(webhook.EndpointHash)); err != nil {
-		log.Warn().Err(err).Msg("Failed to add to HLL")
+		// Batch both operations
+		statsKey := fmt.Sprintf("stats:%s:%s", stat, bucket)
+		pipe.IncrBy(ctx, statsKey, 1)
+		pipe.Expire(ctx, statsKey, 48*time.Hour)
+
+		hllKey := fmt.Sprintf("hll:endpoints:%s", bucket)
+		pipe.PFAdd(ctx, hllKey, string(webhook.EndpointHash))
+		pipe.Expire(ctx, hllKey, 48*time.Hour)
+
+		_, err := pipe.Exec(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("Failed to record stats")
+		}
+	} else {
+		// Fallback to individual operations if pipeline not available
+		// This is the unit-test mocked path
+		// Increment counter
+		if err := w.hotstate.IncrStats(ctx, bucket, map[string]int64{stat: 1}); err != nil {
+			log.Warn().Err(err).Msg("Failed to increment stats")
+		}
+
+		// Add to HLL for unique endpoints
+		if err := w.hotstate.AddToHLL(ctx, "endpoints:"+bucket, string(webhook.EndpointHash)); err != nil {
+			log.Warn().Err(err).Msg("Failed to add to HLL")
+		}
 	}
 }
 

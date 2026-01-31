@@ -162,6 +162,11 @@ func (m *MockHotState) Close() error {
 	return args.Error(0)
 }
 
+func (m *MockHotState) Client() interface{} {
+	args := m.Called()
+	return args.Get(0)
+}
+
 // MockCircuitBreaker implements methods used by Worker from circuit.Breaker
 type MockCircuitBreaker struct {
 	mock.Mock
