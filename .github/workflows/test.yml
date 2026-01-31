@@ -57,8 +57,8 @@ jobs:
 
       - name: Start Redpanda
         run: |
-          docker-compose up -d redpanda
-          docker-compose up redpanda-init
+          docker compose up -d redpanda
+          docker compose up redpanda-init
 
       - name: Wait for Redpanda to be ready
         run: |
@@ -74,9 +74,21 @@ jobs:
           TEST_KAFKA_BROKERS: localhost:19092
         run: go test -v -race -tags=integration -timeout=5m ./internal/broker/... || true
 
+      - name: Run Worker integration tests
+        env:
+          TEST_REDIS_ADDR: localhost:6380
+          TEST_KAFKA_BROKERS: localhost:19092
+        run: go test -v -race -tags=integration -timeout=5m ./internal/worker/...
+
+      - name: Run Scheduler integration tests
+        env:
+          TEST_REDIS_ADDR: localhost:6380
+          TEST_KAFKA_BROKERS: localhost:19092
+        run: go test -v -race -tags=integration -timeout=5m ./internal/scheduler/...
+
       - name: Stop infrastructure
         if: always()
-        run: docker-compose down -v
+        run: docker compose down -v
 
   coverage:
     name: Coverage Report
