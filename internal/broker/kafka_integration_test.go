@@ -245,8 +245,12 @@ func TestPublishBatch(t *testing.T) {
 }
 
 func TestConsumerGroupRebalancing(t *testing.T) {
-	b := testutil.SetupKafka(t)
-	topic := "test-rebalance-" + ulid.Make().String()
+	// Use two separate broker instances to avoid shared sarama.Client closure issues
+	b1 := testutil.SetupKafka(t)
+	b2 := testutil.SetupKafka(t)
+
+	// Create topic with multiple partitions so rebalancing distributes messages
+	topic := testutil.CreateTestTopicWithPartitions(t, b1, 3)
 	group := "test-group-" + ulid.Make().String()
 
 	// Channels to receive messages
@@ -256,9 +260,9 @@ func TestConsumerGroupRebalancing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	// Start first consumer
+	// Start first consumer using broker 1
 	go func() {
-		err := b.Subscribe(ctx, topic, group, func(ctx context.Context, msg *broker.Message) error {
+		err := b1.Subscribe(ctx, topic, group, func(ctx context.Context, msg *broker.Message) error {
 			consumer1 <- msg
 			return nil
 		})
@@ -270,9 +274,9 @@ func TestConsumerGroupRebalancing(t *testing.T) {
 	// Wait for first consumer to join
 	time.Sleep(3 * time.Second)
 
-	// Start second consumer (should trigger rebalance)
+	// Start second consumer using broker 2 (should trigger rebalance)
 	go func() {
-		err := b.Subscribe(ctx, topic, group, func(ctx context.Context, msg *broker.Message) error {
+		err := b2.Subscribe(ctx, topic, group, func(ctx context.Context, msg *broker.Message) error {
 			consumer2 <- msg
 			return nil
 		})
@@ -284,16 +288,16 @@ func TestConsumerGroupRebalancing(t *testing.T) {
 	// Wait for rebalance
 	time.Sleep(3 * time.Second)
 
-	// Publish 10 messages
+	// Publish 10 messages with distinct keys to distribute across partitions
 	messages := make([]broker.Message, 10)
 	for i := 0; i < 10; i++ {
 		messages[i] = broker.Message{
-			Key:   []byte("key-" + string(rune('0'+i))),
+			Key:   []byte("key-" + ulid.Make().String()),
 			Value: []byte("value-" + string(rune('0'+i))),
 		}
 	}
 
-	err := b.Publish(ctx, topic, messages...)
+	err := b1.Publish(ctx, topic, messages...)
 	require.NoError(t, err)
 
 	// Wait for all messages to be consumed
@@ -313,7 +317,6 @@ func TestConsumerGroupRebalancing(t *testing.T) {
 	}
 
 	// Both consumers should have received some messages (load balancing)
-	// Note: This is probabilistic, but with 10 messages it's very likely
 	t.Logf("Consumer 1 received: %d, Consumer 2 received: %d", count1, count2)
 	assert.Equal(t, 10, count1+count2, "total messages should be 10")
 }

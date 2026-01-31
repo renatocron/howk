@@ -45,8 +45,13 @@ func SetupKafka(t *testing.T) *broker.KafkaBroker {
 	return b
 }
 
-// CreateTestTopic creates a unique topic for a test
+// CreateTestTopic creates a unique topic for a test with 1 partition
 func CreateTestTopic(t *testing.T, b *broker.KafkaBroker) string {
+	return CreateTestTopicWithPartitions(t, b, 1)
+}
+
+// CreateTestTopicWithPartitions creates a unique topic with the specified number of partitions
+func CreateTestTopicWithPartitions(t *testing.T, b *broker.KafkaBroker, numPartitions int32) string {
 	topicName := "test-topic-" + ulid.Make().String()
 	brokers := getKafkaBrokers()
 
@@ -59,7 +64,7 @@ func CreateTestTopic(t *testing.T, b *broker.KafkaBroker) string {
 	defer admin.Close()
 
 	err = admin.CreateTopic(topicName, &sarama.TopicDetail{
-		NumPartitions:     1,
+		NumPartitions:     numPartitions,
 		ReplicationFactor: 1,
 	}, false)
 	require.NoError(t, err)

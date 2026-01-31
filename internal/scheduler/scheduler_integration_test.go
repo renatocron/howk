@@ -32,7 +32,13 @@ func setupSchedulerTest(t *testing.T) (*scheduler.Scheduler, *hotstate.RedisHotS
 	s := scheduler.NewScheduler(cfg.Scheduler, hs, pub)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
+	// Register cancel in cleanup so it runs before Redis flush (LIFO order —
+	// this was registered after SetupRedis, so it runs first during cleanup)
+	t.Cleanup(func() {
+		cancel()
+		// Give scheduler goroutine time to observe cancellation and exit
+		time.Sleep(200 * time.Millisecond)
+	})
 
 	return s, hs, b, ctx, cancel
 }
