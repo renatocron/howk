@@ -20,6 +20,7 @@ const (
 type Breaker struct {
 	rdb    *redis.Client
 	config config.CircuitBreakerConfig
+	now    func() time.Time
 }
 
 // NewBreaker creates a new circuit breaker
@@ -27,7 +28,12 @@ func NewBreaker(rdb *redis.Client, cfg config.CircuitBreakerConfig) *Breaker {
 	return &Breaker{
 		rdb:    rdb,
 		config: cfg,
+		now:    time.Now,
 	}
+}
+
+func (b *Breaker) SetNowFunc(now func() time.Time) {
+	b.now = now
 }
 
 func (b *Breaker) key(endpointHash domain.EndpointHash) string {
@@ -43,7 +49,7 @@ func (b *Breaker) Get(ctx context.Context, endpointHash domain.EndpointHash) (*d
 			EndpointHash:   endpointHash,
 			State:          domain.CircuitClosed,
 			Failures:       0,
-			StateChangedAt: time.Now(),
+			StateChangedAt: b.now(),
 		}, nil
 	}
 	if err != nil {
@@ -67,7 +73,7 @@ func (b *Breaker) ShouldAllow(ctx context.Context, endpointHash domain.EndpointH
 		return true, false, err
 	}
 
-	now := time.Now()
+	now := b.now()
 
 	switch cb.State {
 	case domain.CircuitClosed:
@@ -114,7 +120,7 @@ func (b *Breaker) ShouldAllow(ctx context.Context, endpointHash domain.EndpointH
 func (b *Breaker) RecordSuccess(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
 	// Use optimistic locking with WATCH/MULTI/EXEC for atomic updates
 	key := b.key(endpointHash)
-	now := time.Now()
+	now := b.now()
 
 	var cb *domain.CircuitBreaker
 
@@ -163,7 +169,7 @@ func (b *Breaker) RecordSuccess(ctx context.Context, endpointHash domain.Endpoin
 // RecordFailure records a failed delivery
 func (b *Breaker) RecordFailure(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
 	key := b.key(endpointHash)
-	now := time.Now()
+	now := b.now()
 
 	var cb *domain.CircuitBreaker
 
@@ -174,35 +180,30 @@ func (b *Breaker) RecordFailure(ctx context.Context, endpointHash domain.Endpoin
 			return err
 		}
 
+		lastFailureAt := cb.LastFailureAt
 		cb.LastFailureAt = &now
+
+		windowStart := now.Add(-b.config.FailureWindow)
+		if lastFailureAt != nil && lastFailureAt.After(windowStart) {
+			cb.Failures++
+		} else {
+			cb.Failures = 1
+		}
 
 		switch cb.State {
 		case domain.CircuitClosed:
-			// Check if failure is within the window
-			windowStart := now.Add(-b.config.FailureWindow)
-			if cb.LastFailureAt == nil || cb.LastFailureAt.Before(windowStart) {
-				// First failure in window, reset count
-				cb.Failures = 1
-			} else {
-				cb.Failures++
-			}
-
-			// Check if we should open the circuit
 			if cb.Failures >= b.config.FailureThreshold {
 				cb.State = domain.CircuitOpen
 				cb.StateChangedAt = now
 			}
-
 		case domain.CircuitHalfOpen:
 			// Any failure in half-open goes back to open
 			cb.State = domain.CircuitOpen
 			cb.StateChangedAt = now
 			cb.Successes = 0
 			cb.NextProbeAt = nil
-
 		case domain.CircuitOpen:
 			// Already open, just update failure time
-			cb.Failures++
 		}
 
 		return b.saveWithTx(ctx, tx, cb)
@@ -222,7 +223,7 @@ func (b *Breaker) getWithTx(ctx context.Context, tx *redis.Tx, endpointHash doma
 			EndpointHash:   endpointHash,
 			State:          domain.CircuitClosed,
 			Failures:       0,
-			StateChangedAt: time.Now(),
+			StateChangedAt: b.now(),
 		}, nil
 	}
 	if err != nil {
@@ -235,7 +236,6 @@ func (b *Breaker) getWithTx(ctx context.Context, tx *redis.Tx, endpointHash doma
 	}
 	return &cb, nil
 }
-
 func (b *Breaker) save(ctx context.Context, cb *domain.CircuitBreaker) error {
 	data, err := json.Marshal(cb)
 	if err != nil {

@@ -29,8 +29,18 @@ run-all:
 	@wait
 
 # Tests
-test:
-	go test -v -race ./...
+test-unit:
+	go test -v -race -short ./...
+
+test: test-unit
+
+# Unit test coverage
+test-unit-coverage:
+	go test -short -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+	go tool cover -func=coverage.out | grep total
+
 
 test-coverage:
 	go test -coverprofile=coverage.out ./...
