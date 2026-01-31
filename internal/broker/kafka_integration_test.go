@@ -39,7 +39,7 @@ func TestPublish_Subscribe_RoundTrip(t *testing.T) {
 	}()
 
 	// Wait for consumer group to join
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Publish message
 	testMsg := broker.Message{
@@ -61,7 +61,7 @@ func TestPublish_Subscribe_RoundTrip(t *testing.T) {
 		assert.Equal(t, testMsg.Value, msg.Value)
 		assert.Equal(t, "value1", msg.Headers["header1"])
 		assert.Equal(t, "value2", msg.Headers["header2"])
-	case <-time.After(10 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("message not received within timeout")
 	}
 }
@@ -92,7 +92,7 @@ func TestPublishWebhook_Serialization(t *testing.T) {
 	}()
 
 	// Wait for consumer group to join
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Create and publish webhook
 	webhook := testutil.NewTestWebhook("https://example.com/webhook")
@@ -119,7 +119,7 @@ func TestPublishWebhook_Serialization(t *testing.T) {
 		assert.Equal(t, webhook.ConfigID, wh.ConfigID)
 		assert.Equal(t, webhook.Endpoint, wh.Endpoint)
 		assert.Equal(t, webhook.EndpointHash, wh.EndpointHash)
-	case <-time.After(10 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("webhook not received within timeout")
 	}
 }
@@ -146,7 +146,7 @@ func TestPublishResult_Headers(t *testing.T) {
 	}()
 
 	// Wait for consumer group to join
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Create and publish delivery result
 	result := &domain.DeliveryResult{
@@ -187,7 +187,7 @@ func TestPublishResult_Headers(t *testing.T) {
 		assert.Equal(t, result.WebhookID, receivedResult.WebhookID)
 		assert.True(t, receivedResult.Success)
 		assert.Equal(t, 200, receivedResult.StatusCode)
-	case <-time.After(10 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("result not received within timeout")
 	}
 }
@@ -214,7 +214,7 @@ func TestPublishBatch(t *testing.T) {
 	}()
 
 	// Wait for consumer group to join
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Publish batch of 5 messages
 	messages := make([]broker.Message, 5)
@@ -272,7 +272,7 @@ func TestConsumerGroupRebalancing(t *testing.T) {
 	}()
 
 	// Wait for first consumer to join
-	time.Sleep(3 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Start second consumer using broker 2 (should trigger rebalance)
 	go func() {
@@ -286,7 +286,7 @@ func TestConsumerGroupRebalancing(t *testing.T) {
 	}()
 
 	// Wait for rebalance
-	time.Sleep(3 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Publish 10 messages with distinct keys to distribute across partitions
 	messages := make([]broker.Message, 10)

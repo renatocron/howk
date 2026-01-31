@@ -34,8 +34,13 @@ type KafkaConfig struct {
 	ProducerCompression string        `mapstructure:"producer_compression"` // none, gzip, snappy, lz4, zstd
 
 	// Consumer settings
-	ConsumerFetchMinBytes int `mapstructure:"consumer_fetch_min_bytes"`
+	ConsumerFetchMinBytes int           `mapstructure:"consumer_fetch_min_bytes"`
 	ConsumerFetchMaxWait  time.Duration `mapstructure:"consumer_fetch_max_wait"`
+
+	// Consumer group settings
+	GroupSessionTimeout   time.Duration `mapstructure:"group_session_timeout"`
+	GroupHeartbeatInterval time.Duration `mapstructure:"group_heartbeat_interval"`
+	GroupRebalanceTimeout time.Duration `mapstructure:"group_rebalance_timeout"`
 }
 
 type TopicsConfig struct {
@@ -106,8 +111,11 @@ func DefaultConfig() *Config {
 			ProducerBatchSize:   16384,
 			ProducerLingerMs:    50,
 			ProducerCompression: "snappy",
-			ConsumerFetchMinBytes: 1,
-			ConsumerFetchMaxWait:  500 * time.Millisecond,
+			ConsumerFetchMinBytes:  1,
+			ConsumerFetchMaxWait:   500 * time.Millisecond,
+			GroupSessionTimeout:    10 * time.Second,
+			GroupHeartbeatInterval: 3 * time.Second,
+			GroupRebalanceTimeout:  10 * time.Second,
 		},
 		Redis: RedisConfig{
 			Addr:         "localhost:6379",

@@ -44,6 +44,17 @@ func NewKafkaBroker(cfg config.KafkaConfig) (*KafkaBroker, error) {
 	saramaConfig.Consumer.Offsets.Initial = sarama.OffsetNewest
 	saramaConfig.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
 
+	// Consumer group timing
+	if cfg.GroupSessionTimeout > 0 {
+		saramaConfig.Consumer.Group.Session.Timeout = cfg.GroupSessionTimeout
+	}
+	if cfg.GroupHeartbeatInterval > 0 {
+		saramaConfig.Consumer.Group.Heartbeat.Interval = cfg.GroupHeartbeatInterval
+	}
+	if cfg.GroupRebalanceTimeout > 0 {
+		saramaConfig.Consumer.Group.Rebalance.Timeout = cfg.GroupRebalanceTimeout
+	}
+
 	// Client settings
 	saramaConfig.ClientID = "howk"
 	saramaConfig.Version = sarama.V3_0_0_0
