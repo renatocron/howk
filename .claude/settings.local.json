@@ -8,7 +8,8 @@
       "Bash(sudo lsof:*)",
       "Bash(redis-cli:*)",
       "Bash(netstat:*)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(TEST_REDIS_ADDR=localhost:6380 TEST_KAFKA_BROKERS=localhost:19092 go test:*)"
     ]
   }
 }
