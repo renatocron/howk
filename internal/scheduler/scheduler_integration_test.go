@@ -89,7 +89,7 @@ func TestScheduler_PopDueRetries(t *testing.T) {
 	// Wait for webhook to be re-enqueued
 	select {
 	case msg := <-received:
-		assert.Equal(t, webhook.ID, string(msg.Key))
+		assert.Equal(t, webhook.ID, domain.WebhookID(msg.Key))
 
 		// Verify it's the webhook we scheduled
 		var receivedWebhook domain.Webhook

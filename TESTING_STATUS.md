@@ -51,7 +51,7 @@
 ✓ TestPublishBatch
 ✓ TestPublish_Subscribe_RoundTrip (fixed with unique consumer groups)
 ⚠ TestConsumerGroupRebalancing (known design issue - messages distributed, not duplicated)
-⚠ TestHandlerError_NoCommit (known design issue - no redelivery mechanism)
+X TestHandlerError_NoCommit - on porpose (no redelivery mechanism implemented)
 ```
 
 **Worker Integration:** ✅ **5/5 passing - FIXED!**
