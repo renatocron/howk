@@ -34,6 +34,11 @@ func NewKafkaBroker(cfg config.KafkaConfig) (*KafkaBroker, error) {
 	saramaConfig.Producer.Return.Successes = true
 	saramaConfig.Producer.Return.Errors = true
 	saramaConfig.Producer.Compression = compressionCodec(cfg.ProducerCompression)
+
+	if cfg.ProducerLingerMs < 1 {
+		cfg.ProducerLingerMs = 1
+		log.Warn().Msgf("ProducerLingerMs was set to less than 1ms, adjusting to 1ms")
+	}
 	saramaConfig.Producer.Flush.Frequency = time.Duration(cfg.ProducerLingerMs) * time.Millisecond
 	saramaConfig.Producer.Flush.Bytes = cfg.ProducerBatchSize
 

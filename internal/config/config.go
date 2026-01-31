@@ -44,18 +44,18 @@ type KafkaConfig struct {
 	Retention     time.Duration `mapstructure:"retention"`
 
 	// Producer settings
-	ProducerBatchSize   int           `mapstructure:"producer_batch_size"`
-	ProducerLingerMs    int           `mapstructure:"producer_linger_ms"`
-	ProducerCompression string        `mapstructure:"producer_compression"` // none, gzip, snappy, lz4, zstd
+	ProducerBatchSize   int    `mapstructure:"producer_batch_size"`
+	ProducerLingerMs    int    `mapstructure:"producer_linger_ms"`
+	ProducerCompression string `mapstructure:"producer_compression"` // none, gzip, snappy, lz4, zstd
 
 	// Consumer settings
 	ConsumerFetchMinBytes int           `mapstructure:"consumer_fetch_min_bytes"`
 	ConsumerFetchMaxWait  time.Duration `mapstructure:"consumer_fetch_max_wait"`
 
 	// Consumer group settings
-	GroupSessionTimeout   time.Duration `mapstructure:"group_session_timeout"`
+	GroupSessionTimeout    time.Duration `mapstructure:"group_session_timeout"`
 	GroupHeartbeatInterval time.Duration `mapstructure:"group_heartbeat_interval"`
-	GroupRebalanceTimeout time.Duration `mapstructure:"group_rebalance_timeout"`
+	GroupRebalanceTimeout  time.Duration `mapstructure:"group_rebalance_timeout"`
 }
 
 type TopicsConfig struct {
@@ -76,12 +76,12 @@ type RedisConfig struct {
 }
 
 type DeliveryConfig struct {
-	Timeout            time.Duration `mapstructure:"timeout"`
-	MaxIdleConns       int           `mapstructure:"max_idle_conns"`
-	MaxConnsPerHost    int           `mapstructure:"max_conns_per_host"`
-	IdleConnTimeout    time.Duration `mapstructure:"idle_conn_timeout"`
+	Timeout             time.Duration `mapstructure:"timeout"`
+	MaxIdleConns        int           `mapstructure:"max_idle_conns"`
+	MaxConnsPerHost     int           `mapstructure:"max_conns_per_host"`
+	IdleConnTimeout     time.Duration `mapstructure:"idle_conn_timeout"`
 	TLSHandshakeTimeout time.Duration `mapstructure:"tls_handshake_timeout"`
-	UserAgent          string        `mapstructure:"user_agent"`
+	UserAgent           string        `mapstructure:"user_agent"`
 }
 
 type RetryConfig struct {
@@ -92,17 +92,17 @@ type RetryConfig struct {
 }
 
 type CircuitBreakerConfig struct {
-	FailureThreshold  int           `mapstructure:"failure_threshold"`   // failures before OPEN
-	FailureWindow     time.Duration `mapstructure:"failure_window"`      // window for counting failures
-	RecoveryTimeout   time.Duration `mapstructure:"recovery_timeout"`    // time before HALF_OPEN
-	ProbeInterval     time.Duration `mapstructure:"probe_interval"`      // time between probes
-	SuccessThreshold  int           `mapstructure:"success_threshold"`   // successes to close circuit
+	FailureThreshold int           `mapstructure:"failure_threshold"` // failures before OPEN
+	FailureWindow    time.Duration `mapstructure:"failure_window"`    // window for counting failures
+	RecoveryTimeout  time.Duration `mapstructure:"recovery_timeout"`  // time before HALF_OPEN
+	ProbeInterval    time.Duration `mapstructure:"probe_interval"`    // time between probes
+	SuccessThreshold int           `mapstructure:"success_threshold"` // successes to close circuit
 }
 
 type SchedulerConfig struct {
-	PollInterval  time.Duration `mapstructure:"poll_interval"`
-	BatchSize     int           `mapstructure:"batch_size"`
-	LockTimeout   time.Duration `mapstructure:"lock_timeout"`
+	PollInterval time.Duration `mapstructure:"poll_interval"`
+	BatchSize    int           `mapstructure:"batch_size"`
+	LockTimeout  time.Duration `mapstructure:"lock_timeout"`
 }
 
 // DefaultConfig returns sensible defaults
@@ -115,17 +115,17 @@ func DefaultConfig() *Config {
 			MaxRequestSize: 1 << 20, // 1MB
 		},
 		Kafka: KafkaConfig{
-			Brokers:             []string{"localhost:9092"},
+			Brokers: []string{"localhost:9092"},
 			Topics: TopicsConfig{
 				Pending:    "howk.pending",
 				Results:    "howk.results",
 				DeadLetter: "howk.deadletter",
 			},
-			ConsumerGroup:       "howk-workers",
-			Retention:           7 * 24 * time.Hour, // 7 days
-			ProducerBatchSize:   16384,
-			ProducerLingerMs:    50,
-			ProducerCompression: "snappy",
+			ConsumerGroup:          "howk-workers",
+			Retention:              7 * 24 * time.Hour, // 7 days
+			ProducerBatchSize:      16384,
+			ProducerLingerMs:       50,
+			ProducerCompression:    "snappy",
 			ConsumerFetchMinBytes:  1,
 			ConsumerFetchMaxWait:   500 * time.Millisecond,
 			GroupSessionTimeout:    10 * time.Second,
@@ -141,12 +141,12 @@ func DefaultConfig() *Config {
 			WriteTimeout: 3 * time.Second,
 		},
 		Delivery: DeliveryConfig{
-			Timeout:            30 * time.Second,
-			MaxIdleConns:       100,
-			MaxConnsPerHost:    10,
-			IdleConnTimeout:    90 * time.Second,
+			Timeout:             30 * time.Second,
+			MaxIdleConns:        100,
+			MaxConnsPerHost:     10,
+			IdleConnTimeout:     90 * time.Second,
 			TLSHandshakeTimeout: 10 * time.Second,
-			UserAgent:          "HOWK/1.0",
+			UserAgent:           "HOWK/1.0",
 		},
 		Retry: RetryConfig{
 			BaseDelay:   10 * time.Second,
@@ -155,11 +155,11 @@ func DefaultConfig() *Config {
 			Jitter:      0.2,
 		},
 		CircuitBreaker: CircuitBreakerConfig{
-			FailureThreshold:  5,
-			FailureWindow:     60 * time.Second,
-			RecoveryTimeout:   5 * time.Minute,
-			ProbeInterval:     60 * time.Second,
-			SuccessThreshold:  2,
+			FailureThreshold: 5,
+			FailureWindow:    60 * time.Second,
+			RecoveryTimeout:  5 * time.Minute,
+			ProbeInterval:    60 * time.Second,
+			SuccessThreshold: 2,
 		},
 		Scheduler: SchedulerConfig{
 			PollInterval: 1 * time.Second,

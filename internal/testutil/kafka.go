@@ -36,10 +36,10 @@ func SetupKafka(t *testing.T) *broker.KafkaBroker {
 	cfg.Brokers = brokers
 	// Aggressive consumer group timing for tests to reduce flakiness
 	cfg.GroupSessionTimeout = 6 * time.Second
-	cfg.GroupHeartbeatInterval = 2 * time.Second
+	cfg.GroupHeartbeatInterval = 1 * time.Second
 	cfg.GroupRebalanceTimeout = 6 * time.Second
 	// Reduce producer linger for faster test publishing
-	cfg.ProducerLingerMs = 0
+	cfg.ProducerLingerMs = 1
 
 	b, err := broker.NewKafkaBroker(cfg)
 	require.NoError(t, err)
