@@ -50,7 +50,11 @@ func CreateTestTopic(t *testing.T, b *broker.KafkaBroker) string {
 	topicName := "test-topic-" + ulid.Make().String()
 	brokers := getKafkaBrokers()
 
-	admin, err := sarama.NewClusterAdmin(brokers, nil)
+	// Configure Sarama for Redpanda compatibility
+	saramaConfig := sarama.NewConfig()
+	saramaConfig.Version = sarama.V3_0_0_0
+
+	admin, err := sarama.NewClusterAdmin(brokers, saramaConfig)
 	require.NoError(t, err)
 	defer admin.Close()
 

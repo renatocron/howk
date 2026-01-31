@@ -6,7 +6,9 @@
       "Bash(go test:*)",
       "Bash(make:*)",
       "Bash(sudo lsof:*)",
-      "Bash(redis-cli:*)"
+      "Bash(redis-cli:*)",
+      "Bash(netstat:*)",
+      "Bash(docker exec:*)"
     ]
   }
 }

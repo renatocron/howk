@@ -41,7 +41,7 @@ func TestScheduleRetry_PopDueRetries(t *testing.T) {
 	webhook := testutil.NewTestWebhook("http://example.com/retry")
 	retryMsg := &hotstate.RetryMessage{
 		Webhook:     webhook,
-		ScheduledAt: time.Now().Add(100 * time.Millisecond),
+		ScheduledAt: time.Now().Add(2 * time.Second), // Use 2 seconds to avoid Unix timestamp truncation issues
 		Reason:      "test",
 	}
 
@@ -54,7 +54,7 @@ func TestScheduleRetry_PopDueRetries(t *testing.T) {
 	assert.Empty(t, retries)
 
 	// Wait for retry to be due
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(3 * time.Second)
 
 	// Pop again - should get the webhook
 	retries, err = hs.PopDueRetries(ctx, 10)
