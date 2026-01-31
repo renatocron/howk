@@ -19,16 +19,18 @@ const (
 	processedPrefix = "processed:"
 	statsPrefix     = "stats:"
 	hllPrefix       = "hll:"
+	circuitStatePrefix = "circuit:" // Local constant for circuit breaker keys
 )
 
 // RedisHotState implements HotState using Redis
 type RedisHotState struct {
-	rdb    *redis.Client
-	config config.RedisConfig
+	rdb          *redis.Client
+	config       config.RedisConfig
+	circuitConfig config.CircuitBreakerConfig // Added for circuit breaker logic
 }
 
 // NewRedisHotState creates a new Redis-backed hot state
-func NewRedisHotState(cfg config.RedisConfig) (*RedisHotState, error) {
+func NewRedisHotState(cfg config.RedisConfig, cbConfig config.CircuitBreakerConfig) (*RedisHotState, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         cfg.Addr,
 		Password:     cfg.Password,
@@ -51,7 +53,152 @@ func NewRedisHotState(cfg config.RedisConfig) (*RedisHotState, error) {
 	return &RedisHotState{
 		rdb:    rdb,
 		config: cfg,
+		circuitConfig: cbConfig,
 	}, nil
+}
+
+func (r *RedisHotState) circuitKey(endpointHash domain.EndpointHash) string {
+	return circuitStatePrefix + string(endpointHash)
+}
+
+// --- Circuit Breaker Operations ---
+
+func (r *RedisHotState) GetCircuit(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
+	key := r.circuitKey(endpointHash)
+	data, err := r.rdb.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		// No circuit state = closed by default
+		return &domain.CircuitBreaker{
+			EndpointHash:   endpointHash,
+			State:          domain.CircuitClosed,
+			Failures:       0,
+			StateChangedAt: time.Now(), // Use current time as initial state change
+		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get circuit: %w", err)
+	}
+
+	var cb domain.CircuitBreaker
+	if err := json.Unmarshal(data, &cb); err != nil {
+		return nil, fmt.Errorf("unmarshal circuit: %w", err)
+	}
+
+	return &cb, nil
+}
+
+func (r *RedisHotState) UpdateCircuit(ctx context.Context, cb *domain.CircuitBreaker) error {
+	data, err := json.Marshal(cb)
+	if err != nil {
+		return fmt.Errorf("marshal circuit: %w", err)
+	}
+
+	// Calculate TTL for circuit state
+	ttl := 24 * time.Hour // Default
+	if cb.State == domain.CircuitClosed && cb.Failures == 0 {
+		ttl = 2 * r.circuitConfig.RecoveryTimeout // Use configured recovery timeout
+	}
+
+	return r.rdb.Set(ctx, r.circuitKey(cb.EndpointHash), data, ttl).Err()
+}
+
+func (r *RedisHotState) RecordSuccess(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
+	key := r.circuitKey(endpointHash)
+	now := time.Now()
+
+	var cb *domain.CircuitBreaker
+
+	err := r.rdb.Watch(ctx, func(tx *redis.Tx) error {
+		var err error
+		cb, err = r.GetCircuit(ctx, endpointHash) // Use HotState's GetCircuit
+		if err != nil {
+			return err
+		}
+
+		cb.LastSuccessAt = &now
+
+		switch cb.State {
+		case domain.CircuitClosed:
+			// Reset failure count on success
+			cb.Failures = 0
+
+		case domain.CircuitHalfOpen:
+			cb.Successes++
+			if cb.Successes >= r.circuitConfig.SuccessThreshold {
+				// Transition to closed
+				cb.State = domain.CircuitClosed
+				cb.StateChangedAt = now
+				cb.Failures = 0
+				cb.Successes = 0
+				cb.NextProbeAt = nil
+			}
+
+		case domain.CircuitOpen:
+			// Shouldn't happen, but handle gracefully
+			cb.State = domain.CircuitHalfOpen
+			cb.StateChangedAt = now
+			cb.Successes = 1
+		}
+
+		return r.UpdateCircuit(ctx, cb) // Use HotState's UpdateCircuit
+	}, key)
+
+	if err != nil {
+		return nil, fmt.Errorf("record success: %w", err)
+	}
+
+	return cb, nil
+}
+
+func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
+	key := r.circuitKey(endpointHash)
+	now := time.Now()
+
+	var cb *domain.CircuitBreaker
+
+	err := r.rdb.Watch(ctx, func(tx *redis.Tx) error {
+		var err error
+		cb, err = r.GetCircuit(ctx, endpointHash) // Use HotState's GetCircuit
+		if err != nil {
+			return err
+		}
+
+		lastFailureAt := cb.LastFailureAt
+		cb.LastFailureAt = &now
+
+		// Only count failures within the failure window
+		windowStart := now.Add(-r.circuitConfig.FailureWindow)
+		if lastFailureAt != nil && lastFailureAt.After(windowStart) {
+			cb.Failures++
+		} else {
+			// Reset failures if outside window or first failure
+			cb.Failures = 1
+		}
+
+		switch cb.State {
+		case domain.CircuitClosed:
+			if cb.Failures >= r.circuitConfig.FailureThreshold {
+				cb.State = domain.CircuitOpen
+				cb.StateChangedAt = now
+			}
+		case domain.CircuitHalfOpen:
+			// Any failure in half-open goes back to open
+			cb.State = domain.CircuitOpen
+			cb.StateChangedAt = now
+			cb.Successes = 0
+			cb.NextProbeAt = nil
+		case domain.CircuitOpen:
+			// Already open, just update failure time
+		}
+
+		return r.UpdateCircuit(ctx, cb) // Use HotState's UpdateCircuit
+	}, key)
+
+	if err != nil {
+		return nil, fmt.Errorf("record failure: %w", err)
+	}
+
+	return cb, nil
 }
 
 // --- Status Operations ---
@@ -251,7 +398,7 @@ func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
 		processedPrefix + "*",
 		statsPrefix + "*",
 		hllPrefix + "*",
-		"circuit:*",
+		circuitStatePrefix + "*", // Include circuit state keys
 	}
 
 	for _, pattern := range patterns {
@@ -282,6 +429,8 @@ func (r *RedisHotState) Close() error {
 }
 
 // Client returns the underlying Redis client (for circuit breaker)
+// NOTE: This should ideally not be exposed if HotState fully encapsulates Redis interactions.
+// It's kept for backward compatibility/existing usage if any component directly uses it.
 func (r *RedisHotState) Client() *redis.Client {
 	return r.rdb
 }

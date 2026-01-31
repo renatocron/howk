@@ -9,6 +9,12 @@ import (
 	"github.com/howk/howk/internal/domain"
 )
 
+// Retrier abstracts the retry logic methods used by the worker
+type Retrier interface {
+	ShouldRetry(webhook *domain.Webhook, statusCode int, err error) bool
+	NextRetryAt(attempt int, circuitState domain.CircuitState) time.Time
+}
+
 // Strategy calculates retry delays with exponential backoff
 type Strategy struct {
 	config config.RetryConfig

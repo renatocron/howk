@@ -21,6 +21,11 @@ const (
 	maxResponseBody = 1024 // Only read first 1KB of response for logging
 )
 
+// Deliverer abstracts the Deliver method
+type Deliverer interface {
+	Deliver(ctx context.Context, webhook *domain.Webhook) *Result
+}
+
 // Client delivers webhooks via HTTP
 type Client struct {
 	httpClient *http.Client

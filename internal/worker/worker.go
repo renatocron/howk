@@ -9,7 +9,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
-	"github.com/howk/howk/internal/circuit"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
@@ -20,23 +19,23 @@ import (
 // Worker processes webhooks from Kafka and delivers them
 type Worker struct {
 	config    *config.Config
-	broker    *broker.KafkaBroker
-	publisher *broker.KafkaWebhookPublisher
-	hotstate  *hotstate.RedisHotState
-	circuit   *circuit.Breaker
-	delivery  *delivery.Client
-	retry     *retry.Strategy
+	broker    broker.Broker
+	publisher broker.WebhookPublisher
+	hotstate  hotstate.HotState
+	circuit   hotstate.CircuitBreakerChecker
+	delivery  delivery.Deliverer
+	retry     retry.Retrier
 }
 
 // NewWorker creates a new worker
 func NewWorker(
 	cfg *config.Config,
-	brk *broker.KafkaBroker,
-	pub *broker.KafkaWebhookPublisher,
-	hs *hotstate.RedisHotState,
-	cb *circuit.Breaker,
-	dc *delivery.Client,
-	rs *retry.Strategy,
+	brk broker.Broker,
+	pub broker.WebhookPublisher,
+	hs hotstate.HotState,
+	cb hotstate.CircuitBreakerChecker,
+	dc delivery.Deliverer,
+	rs retry.Retrier,
 ) *Worker {
 	return &Worker{
 		config:    cfg,
@@ -275,4 +274,32 @@ func (w *Worker) recordStats(ctx context.Context, stat string, webhook *domain.W
 	if err := w.hotstate.AddToHLL(ctx, "endpoints:"+bucket, string(webhook.EndpointHash)); err != nil {
 		log.Warn().Err(err).Msg("Failed to add to HLL")
 	}
+}
+
+func (w *Worker) GetConfig() *config.Config {
+	return w.config
+}
+
+func (w *Worker) GetBroker() broker.Broker {
+	return w.broker
+}
+
+func (w *Worker) GetPublisher() broker.WebhookPublisher {
+	return w.publisher
+}
+
+func (w *Worker) GetHotState() hotstate.HotState {
+	return w.hotstate
+}
+
+func (w *Worker) GetCircuit() hotstate.CircuitBreakerChecker {
+	return w.circuit
+}
+
+func (w *Worker) GetDelivery() delivery.Deliverer {
+	return w.delivery
+}
+
+func (w *Worker) GetRetry() retry.Retrier {
+	return w.retry
 }
