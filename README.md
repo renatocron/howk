@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/gh/renatocron/howk/graph/badge.svg?token=UXH5PUHYH0)](https://codecov.io/gh/renatocron/howk)
+
 # HOWK - High Opinionated Webhook Kit
 
 A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis.
@@ -102,7 +104,7 @@ Exponential backoff with circuit-aware delays:
 
 ```
 Base delay: 10s
-Max delay: 24h  
+Max delay: 24h
 Max attempts: 20
 Jitter: ±20%
 
@@ -156,7 +158,7 @@ kafka:
 
 redis:
   addr: "localhost:6379"
-  
+
 delivery:
   timeout: 30s
   max_idle_conns: 100
