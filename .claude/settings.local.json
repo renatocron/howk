@@ -12,7 +12,8 @@
       "Bash(TEST_REDIS_ADDR=localhost:6380 TEST_KAFKA_BROKERS=localhost:19092 go test:*)",
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(ls:*)"
     ]
   }
 }

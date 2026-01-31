@@ -14,6 +14,7 @@ import (
 
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
+	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/scheduler"
 	"github.com/howk/howk/internal/testutil"
