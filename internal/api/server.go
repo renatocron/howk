@@ -9,20 +9,25 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/script"
 )
 
 // Server is the HTTP API server
 type Server struct {
-	config    config.APIConfig
-	publisher *broker.KafkaWebhookPublisher
-	hotstate  *hotstate.RedisHotState
-	router    *gin.Engine
+	config          config.APIConfig
+	publisher       *broker.KafkaWebhookPublisher
+	hotstate        *hotstate.RedisHotState
+	scriptValidator *script.Validator
+	scriptPublisher *script.Publisher
+	router          *gin.Engine
+	logger          zerolog.Logger
 }
 
 // NewServer creates a new API server
@@ -30,6 +35,8 @@ func NewServer(
 	cfg config.APIConfig,
 	pub *broker.KafkaWebhookPublisher,
 	hs *hotstate.RedisHotState,
+	scriptValidator *script.Validator,
+	scriptPublisher *script.Publisher,
 ) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
@@ -37,10 +44,13 @@ func NewServer(
 	router.Use(requestLogger())
 
 	s := &Server{
-		config:    cfg,
-		publisher: pub,
-		hotstate:  hs,
-		router:    router,
+		config:          cfg,
+		publisher:       pub,
+		hotstate:        hs,
+		scriptValidator: scriptValidator,
+		scriptPublisher: scriptPublisher,
+		router:          router,
+		logger:          log.With().Str("component", "api").Logger(),
 	}
 
 	s.setupRoutes()
@@ -59,6 +69,15 @@ func (s *Server) setupRoutes() {
 		webhooks.POST("/:config/enqueue", s.enqueueWebhook)
 		webhooks.POST("/:config/enqueue/batch", s.enqueueWebhookBatch)
 		webhooks.GET("/:webhook_id/status", s.getStatus)
+	}
+
+	// Script endpoints
+	scripts := s.router.Group("/config")
+	{
+		scripts.PUT("/:config_id/script", s.handleUploadScript)
+		scripts.GET("/:config_id/script", s.handleGetScript)
+		scripts.DELETE("/:config_id/script", s.handleDeleteScript)
+		scripts.POST("/:config_id/script/test", s.handleTestScript)
 	}
 
 	// Stats endpoint

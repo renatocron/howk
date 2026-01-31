@@ -14,6 +14,7 @@ import (
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/script"
 )
 
 func main() {
@@ -56,8 +57,12 @@ func main() {
 	}
 	defer hs.Close()
 
+	// Initialize script components
+	scriptValidator := script.NewValidator()
+	scriptPublisher := script.NewPublisher(kafkaBroker, cfg.Kafka.Topics.Scripts)
+
 	// Create and run API server
-	server := api.NewServer(cfg.API, publisher, hs)
+	server := api.NewServer(cfg.API, publisher, hs, scriptValidator, scriptPublisher)
 
 	// Run server
 	go func() {

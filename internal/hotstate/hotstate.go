@@ -40,6 +40,11 @@ type HotState interface {
 	// Idempotency
 	CheckAndSetProcessed(ctx context.Context, webhookID domain.WebhookID, attempt int, ttl time.Duration) (bool, error)
 
+	// Script operations
+	GetScript(ctx context.Context, configID domain.ConfigID) (string, error) // Returns JSON-encoded ScriptConfig
+	SetScript(ctx context.Context, configID domain.ConfigID, scriptJSON string, ttl time.Duration) error
+	DeleteScript(ctx context.Context, configID domain.ConfigID) error
+
 	// Health & Admin
 	Ping(ctx context.Context) error
 	FlushForRebuild(ctx context.Context) error

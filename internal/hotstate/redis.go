@@ -14,12 +14,13 @@ import (
 )
 
 const (
-	statusPrefix    = "status:"
-	retryQueue      = "retries"
-	processedPrefix = "processed:"
-	statsPrefix     = "stats:"
-	hllPrefix       = "hll:"
+	statusPrefix       = "status:"
+	retryQueue         = "retries"
+	processedPrefix    = "processed:"
+	statsPrefix        = "stats:"
+	hllPrefix          = "hll:"
 	circuitStatePrefix = "circuit:" // Local constant for circuit breaker keys
+	scriptPrefix       = "script:"  // Script cache keys
 )
 
 // RedisHotState implements HotState using Redis
@@ -422,6 +423,41 @@ func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+// --- Script Operations ---
+
+// GetScript retrieves a script configuration from Redis cache
+// Returns the JSON-encoded ScriptConfig or error if not found
+func (r *RedisHotState) GetScript(ctx context.Context, configID domain.ConfigID) (string, error) {
+	key := scriptPrefix + string(configID)
+	data, err := r.rdb.Get(ctx, key).Result()
+	if err == redis.Nil {
+		return "", fmt.Errorf("script not found for config_id: %s", configID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("get script: %w", err)
+	}
+	return data, nil
+}
+
+// SetScript stores a script configuration in Redis cache
+// scriptJSON should be the JSON-encoded ScriptConfig
+func (r *RedisHotState) SetScript(ctx context.Context, configID domain.ConfigID, scriptJSON string, ttl time.Duration) error {
+	key := scriptPrefix + string(configID)
+	if err := r.rdb.Set(ctx, key, scriptJSON, ttl).Err(); err != nil {
+		return fmt.Errorf("set script: %w", err)
+	}
+	return nil
+}
+
+// DeleteScript removes a script configuration from Redis cache
+func (r *RedisHotState) DeleteScript(ctx context.Context, configID domain.ConfigID) error {
+	key := scriptPrefix + string(configID)
+	if err := r.rdb.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("delete script: %w", err)
+	}
 	return nil
 }
 

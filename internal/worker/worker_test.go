@@ -172,6 +172,21 @@ func (m *MockHotState) Client() *redis.Client {
 	return nil
 }
 
+func (m *MockHotState) GetScript(ctx context.Context, configID domain.ConfigID) (string, error) {
+	args := m.Called(ctx, configID)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockHotState) SetScript(ctx context.Context, configID domain.ConfigID, scriptJSON string, ttl time.Duration) error {
+	args := m.Called(ctx, configID, scriptJSON, ttl)
+	return args.Error(0)
+}
+
+func (m *MockHotState) DeleteScript(ctx context.Context, configID domain.ConfigID) error {
+	args := m.Called(ctx, configID)
+	return args.Error(0)
+}
+
 // MockCircuitBreaker implements methods used by Worker from circuit.Breaker
 type MockCircuitBreaker struct {
 	mock.Mock
