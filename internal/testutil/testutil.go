@@ -29,7 +29,7 @@ func NewTestWebhookWithOpts(opts WebhookOpts) *domain.Webhook {
 		opts.Endpoint = "https://example.com/webhook"
 	}
 	if opts.ConfigID == "" {
-		opts.ConfigID = "test-tenant"
+		opts.ConfigID = "test-config"
 	}
 	if opts.Payload == nil {
 		opts.Payload = json.RawMessage(`{"test": true}`)

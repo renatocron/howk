@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/howk/howk/internal/domain"
 )
 
@@ -44,7 +46,7 @@ type HotState interface {
 	Close() error
 
 	// Redis client access for advanced operations
-	Client() interface{}
+	Client() *redis.Client
 }
 
 // CircuitBreakerChecker is a subset of HotState for circuit checking

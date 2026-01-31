@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
@@ -162,9 +164,12 @@ func (m *MockHotState) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockHotState) Client() interface{} {
+func (m *MockHotState) Client() *redis.Client {
 	args := m.Called()
-	return args.Get(0)
+	if client, ok := args.Get(0).(*redis.Client); ok {
+		return client
+	}
+	return nil
 }
 
 // MockCircuitBreaker implements methods used by Worker from circuit.Breaker

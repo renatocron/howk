@@ -92,7 +92,7 @@ import (
 func NewTestWebhook(endpoint string) *domain.Webhook {
     return &domain.Webhook{
         ID:           domain.WebhookID("wh_test_" + ulid.Make().String()),
-        ConfigID:     "test-tenant",
+        ConfigID:     "test-config",
         Endpoint:     endpoint,
         EndpointHash: domain.HashEndpoint(endpoint),
         Payload:      []byte(`{"test":true}`),

@@ -103,7 +103,7 @@ func TestPublishWebhook_Serialization(t *testing.T) {
 		Key:   []byte(webhook.ID),
 		Value: data,
 		Headers: map[string]string{
-			"tenant_id":     string(webhook.ConfigID),
+			"config_id":     string(webhook.ConfigID),
 			"endpoint_hash": string(webhook.EndpointHash),
 			"attempt":       "1",
 		},
@@ -151,7 +151,7 @@ func TestPublishResult_Headers(t *testing.T) {
 	// Create and publish delivery result
 	result := &domain.DeliveryResult{
 		WebhookID:    "wh_test_result",
-		ConfigID:     "test-tenant",
+		ConfigID:     "test-config",
 		EndpointHash: "test-hash",
 		Success:      true,
 		StatusCode:   200,
@@ -165,7 +165,7 @@ func TestPublishResult_Headers(t *testing.T) {
 		Key:   []byte(result.WebhookID),
 		Value: data,
 		Headers: map[string]string{
-			"tenant_id":     string(result.ConfigID),
+			"config_id":     string(result.ConfigID),
 			"endpoint_hash": string(result.EndpointHash),
 			"success":       "true",
 		},
@@ -177,7 +177,7 @@ func TestPublishResult_Headers(t *testing.T) {
 	// Wait for result
 	select {
 	case msg := <-received:
-		assert.Equal(t, "test-tenant", msg.Headers["tenant_id"])
+		assert.Equal(t, "test-config", msg.Headers["config_id"])
 		assert.Equal(t, "test-hash", msg.Headers["endpoint_hash"])
 		assert.Equal(t, "true", msg.Headers["success"])
 

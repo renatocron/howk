@@ -10,7 +10,7 @@ import (
 // WebhookID is a ULID-based unique identifier
 type WebhookID string
 
-// ConfigID identifies the customer/tenant
+// ConfigID identifies the customer or configuration
 type ConfigID string
 
 // EndpointHash is a SHA256 hash of the endpoint URL (for circuit breaker keys)
@@ -19,7 +19,7 @@ type EndpointHash string
 // Webhook represents a webhook to be delivered
 type Webhook struct {
 	ID             WebhookID         `json:"id"`
-	ConfigID       ConfigID          `json:"tenant_id"`
+	ConfigID       ConfigID          `json:"config_id"`
 	Endpoint       string            `json:"endpoint"`
 	EndpointHash   EndpointHash      `json:"endpoint_hash"`
 	Payload        json.RawMessage   `json:"payload"`
@@ -37,7 +37,7 @@ type Webhook struct {
 // DeliveryResult represents the outcome of a delivery attempt
 type DeliveryResult struct {
 	WebhookID    WebhookID     `json:"webhook_id"`
-	ConfigID     ConfigID      `json:"tenant_id"`
+	ConfigID     ConfigID      `json:"config_id"`
 	Endpoint     string        `json:"endpoint"`
 	EndpointHash EndpointHash  `json:"endpoint_hash"`
 	Attempt      int           `json:"attempt"`

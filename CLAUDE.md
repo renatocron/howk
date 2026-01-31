@@ -176,7 +176,7 @@ Circuit HALF_OPEN: immediate (it's a probe)
 
 ### Webhook
 - `ID`: ULID-based unique identifier
-- `ConfigID`: Customer/tenant identifier
+- `ConfigID`: config identifier -> implicit tenant
 - `Endpoint`: Target URL
 - `EndpointHash`: SHA256 hash of endpoint (for circuit breaker keys)
 - `Payload`: JSON payload to deliver

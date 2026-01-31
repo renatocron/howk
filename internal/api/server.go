@@ -55,8 +55,8 @@ func (s *Server) setupRoutes() {
 	// Webhook endpoints
 	webhooks := s.router.Group("/webhooks")
 	{
-		webhooks.POST("/:tenant/enqueue", s.enqueueWebhook)
-		webhooks.POST("/:tenant/enqueue/batch", s.enqueueWebhookBatch)
+		webhooks.POST("/:config/enqueue", s.enqueueWebhook)
+		webhooks.POST("/:config/enqueue/batch", s.enqueueWebhookBatch)
 		webhooks.GET("/:webhook_id/status", s.getStatus)
 	}
 
@@ -152,7 +152,7 @@ func (s *Server) readyCheck(c *gin.Context) {
 }
 
 func (s *Server) enqueueWebhook(c *gin.Context) {
-	configID := c.Param("tenant")
+	configID := c.Param("config")
 
 	var req EnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -189,7 +189,7 @@ func (s *Server) enqueueWebhook(c *gin.Context) {
 }
 
 func (s *Server) enqueueWebhookBatch(c *gin.Context) {
-	configID := c.Param("tenant")
+	configID := c.Param("config")
 
 	var req BatchEnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

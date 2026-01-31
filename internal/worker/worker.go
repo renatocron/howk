@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
@@ -68,7 +67,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 
 	logger := log.With().
 		Str("webhook_id", string(webhook.ID)).
-		Str("tenant_id", string(webhook.ConfigID)).
+		Str("config_id", string(webhook.ConfigID)).
 		Str("endpoint_hash", string(webhook.EndpointHash)).
 		Int("attempt", webhook.Attempt).
 		Logger()
@@ -266,9 +265,8 @@ func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, stat
 func (w *Worker) recordStats(ctx context.Context, stat string, webhook *domain.Webhook) {
 	bucket := time.Now().Format("2006010215") // hourly bucket
 
-	// Use Redis pipelining for better performance
-	// This is the production/integration test path
-	if client, ok := w.hotstate.Client().(*redis.Client); ok && client != nil {
+	// Use Redis pipelining for better performance when a client is available
+	if client := w.hotstate.Client(); client != nil {
 		pipe := client.Pipeline()
 
 		// Batch both operations
@@ -280,22 +278,19 @@ func (w *Worker) recordStats(ctx context.Context, stat string, webhook *domain.W
 		pipe.PFAdd(ctx, hllKey, string(webhook.EndpointHash))
 		pipe.Expire(ctx, hllKey, 48*time.Hour)
 
-		_, err := pipe.Exec(ctx)
-		if err != nil {
+		if _, err := pipe.Exec(ctx); err != nil {
 			log.Warn().Err(err).Msg("Failed to record stats")
 		}
-	} else {
-		// Fallback to individual operations if pipeline not available
-		// This is the unit-test mocked path
-		// Increment counter
-		if err := w.hotstate.IncrStats(ctx, bucket, map[string]int64{stat: 1}); err != nil {
-			log.Warn().Err(err).Msg("Failed to increment stats")
-		}
+		return
+	}
 
-		// Add to HLL for unique endpoints
-		if err := w.hotstate.AddToHLL(ctx, "endpoints:"+bucket, string(webhook.EndpointHash)); err != nil {
-			log.Warn().Err(err).Msg("Failed to add to HLL")
-		}
+	// Fallback to individual operations if pipeline unavailable (e.g., mocks)
+	if err := w.hotstate.IncrStats(ctx, bucket, map[string]int64{stat: 1}); err != nil {
+		log.Warn().Err(err).Msg("Failed to increment stats")
+	}
+
+	if err := w.hotstate.AddToHLL(ctx, "endpoints:"+bucket, string(webhook.EndpointHash)); err != nil {
+		log.Warn().Err(err).Msg("Failed to add to HLL")
 	}
 }
 

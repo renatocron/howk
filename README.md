@@ -16,7 +16,7 @@ A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis
 ```
                     ┌─────────────────────────────────────┐
                     │           API Gateway               │
-                    │  POST /webhooks/:tenant/enqueue     │
+                    │  POST /webhooks/:config/enqueue     │
                     │  validate → batch produce           │
                     │  → 202 Accepted                     │
                     └───────────────┬─────────────────────┘
@@ -183,7 +183,7 @@ circuit_breaker:
 ### Enqueue Webhook
 
 ```
-POST /webhooks/:tenant/enqueue
+POST /webhooks/:config/enqueue
 ```
 
 Request:
