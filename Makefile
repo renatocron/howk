@@ -41,6 +41,23 @@ test-unit-coverage:
 	@echo "Coverage report: coverage.html"
 	go tool cover -func=coverage.out | grep total
 
+# Integration tests (requires infrastructure)
+test-integration:
+	go test -v -race -tags=integration ./...
+
+# E2E tests (requires all services)
+test-e2e:
+	go test -v -race -tags=e2e ./...
+
+# Run all tests
+test-all: test-unit test-integration test-e2e
+
+# CI test pipeline (unit + integration)
+test-ci: infra
+	@echo "Waiting for services..."
+	@sleep 15
+	go test -v -race -short ./...
+	go test -v -race -tags=integration ./...
 
 test-coverage:
 	go test -coverprofile=coverage.out ./...
@@ -58,7 +75,7 @@ infra:
 	@sleep 10
 	@echo "Infrastructure ready!"
 	@echo "  Kafka: localhost:19092"
-	@echo "  Redis: localhost:6379"
+	@echo "  Redis: localhost:6380 (Docker)"
 	@echo "  Console: http://localhost:8888"
 	@echo "  Echo server: http://localhost:8090"
 

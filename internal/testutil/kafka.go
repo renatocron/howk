@@ -3,6 +3,8 @@
 package testutil
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,14 +15,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// SetupKafka connects to localhost:19092
+// getKafkaBrokers returns Kafka brokers from TEST_KAFKA_BROKERS env var or defaults
+func getKafkaBrokers() []string {
+	brokers := os.Getenv("TEST_KAFKA_BROKERS")
+	if brokers == "" {
+		return []string{"localhost:19092"} // Default for docker-compose exposed port
+	}
+	return strings.Split(brokers, ",")
+}
+
+// SetupKafka connects to Kafka (uses TEST_KAFKA_BROKERS env var, defaults to localhost:19092)
 func SetupKafka(t *testing.T) *broker.KafkaBroker {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
+	brokers := getKafkaBrokers()
+
 	cfg := config.DefaultConfig().Kafka
-	cfg.Brokers = []string{"localhost:19092"}
+	cfg.Brokers = brokers
 
 	b, err := broker.NewKafkaBroker(cfg)
 	require.NoError(t, err)
@@ -35,8 +48,9 @@ func SetupKafka(t *testing.T) *broker.KafkaBroker {
 // CreateTestTopic creates a unique topic for a test
 func CreateTestTopic(t *testing.T, b *broker.KafkaBroker) string {
 	topicName := "test-topic-" + ulid.Make().String()
+	brokers := getKafkaBrokers()
 
-	admin, err := sarama.NewClusterAdmin([]string{"localhost:19092"}, nil)
+	admin, err := sarama.NewClusterAdmin(brokers, nil)
 	require.NoError(t, err)
 	defer admin.Close()
 

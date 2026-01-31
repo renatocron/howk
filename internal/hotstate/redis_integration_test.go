@@ -4,7 +4,6 @@ package hotstate_test
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 

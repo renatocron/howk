@@ -4,15 +4,21 @@ package testutil
 
 import (
     "context"
+    "os"
     "testing"
     "github.com/howk/howk/internal/config"
     "github.com/howk/howk/internal/hotstate"
 )
 
-// SetupRedis connects to localhost:6379, flushes DB on cleanup
+// SetupRedis connects to Redis (uses TEST_REDIS_ADDR env var, defaults to localhost:6380)
 func SetupRedis(t *testing.T) *hotstate.RedisHotState {
+	addr := os.Getenv("TEST_REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:6380" // Default for docker-compose exposed port (6380 to avoid conflict with local Redis)
+	}
+
 	cfg := config.RedisConfig{
-		Addr: "localhost:6379",
+		Addr: addr,
 		DB:   15, // Use test DB
 	}
 	return SetupRedisWithConfig(t, cfg)
@@ -28,6 +34,10 @@ func SetupRedisWithConfig(t *testing.T, cfg config.RedisConfig) *hotstate.RedisH
     if err != nil {
         t.Fatalf("failed to connect to redis: %v", err)
     }
+
+    // Flush test DB at start to ensure clean state
+    ctx := context.Background()
+    hs.Client().FlushDB(ctx)
 
     // Flush test DB on cleanup
     t.Cleanup(func() {

@@ -3,7 +3,10 @@
     "allow": [
       "Bash(grep:*)",
       "Bash(tree:*)",
-      "Bash(go test:*)"
+      "Bash(go test:*)",
+      "Bash(make:*)",
+      "Bash(sudo lsof:*)",
+      "Bash(redis-cli:*)"
     ]
   }
 }
