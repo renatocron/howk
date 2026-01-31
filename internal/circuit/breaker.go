@@ -69,46 +69,81 @@ func (b *Breaker) Get(ctx context.Context, endpointHash domain.EndpointHash) (*d
 func (b *Breaker) ShouldAllow(ctx context.Context, endpointHash domain.EndpointHash) (bool, bool, error) {
 	cb, err := b.Get(ctx, endpointHash)
 	if err != nil {
-		// On error, allow the request (fail open)
 		return true, false, err
 	}
 
 	now := b.now()
+	key := b.key(endpointHash)
 
 	switch cb.State {
 	case domain.CircuitClosed:
 		return true, false, nil
 
 	case domain.CircuitOpen:
-		// Check if it's time to transition to half-open
+		// Check if recovery timeout has passed
 		if now.After(cb.StateChangedAt.Add(b.config.RecoveryTimeout)) {
-			// Transition to half-open
-			cb.State = domain.CircuitHalfOpen
-			cb.StateChangedAt = now
-			cb.Successes = 0
-			nextProbe := now.Add(b.config.ProbeInterval)
-			cb.NextProbeAt = &nextProbe
-			if err := b.save(ctx, cb); err != nil {
+			// Use optimistic locking to prevent race condition
+			var transitioned bool
+			err := b.rdb.Watch(ctx, func(tx *redis.Tx) error {
+				// Re-check state inside transaction
+				currentCB, err := b.getWithTx(ctx, tx, endpointHash)
+				if err != nil {
+					return err
+				}
+
+				// Another worker may have already transitioned
+				if currentCB.State != domain.CircuitOpen {
+					return nil // No-op, already transitioned
+				}
+
+				// Transition to half-open
+				currentCB.State = domain.CircuitHalfOpen
+				currentCB.StateChangedAt = now
+				currentCB.Successes = 0
+				nextProbe := now.Add(b.config.ProbeInterval)
+				currentCB.NextProbeAt = &nextProbe
+
+				transitioned = true
+				return b.saveWithTx(ctx, tx, currentCB)
+			}, key)
+
+			if err != nil {
 				return false, false, err
 			}
-			// Allow this request as a probe
-			return true, true, nil
+
+			// If we successfully transitioned, allow as probe
+			if transitioned {
+				return true, true, nil
+			}
 		}
-		// Circuit is open, don't allow
 		return false, false, nil
 
 	case domain.CircuitHalfOpen:
-		// Only allow if it's time for a probe
+		// Use distributed lock for probe requests
+		lockKey := fmt.Sprintf("probe_lock:%s", endpointHash)
+
 		if cb.NextProbeAt == nil || now.After(*cb.NextProbeAt) {
+			// Try to acquire probe lock (expires after probe interval)
+			locked, err := b.rdb.SetNX(ctx, lockKey, "1", b.config.ProbeInterval).Result()
+			if err != nil {
+				// On Redis error, allow to prevent cascading failures
+				return true, true, err
+			}
+
+			if !locked {
+				// Another worker is already probing
+				return false, false, nil
+			}
+
 			// Update next probe time
 			nextProbe := now.Add(b.config.ProbeInterval)
 			cb.NextProbeAt = &nextProbe
 			if err := b.save(ctx, cb); err != nil {
-				return true, true, err
+				return true, true, err // Allow probe even if save fails
 			}
+
 			return true, true, nil
 		}
-		// Not time for a probe yet
 		return false, false, nil
 
 	default:
