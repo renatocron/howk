@@ -346,7 +346,8 @@ func (r *RedisHotState) GetStats(ctx context.Context, from, to time.Time) (*doma
 	pipe.Exec(ctx)
 
 	// Aggregate results
-	for _, bucket := range buckets {
+	for _, bucket :=
+	range buckets {
 		if val, err := cmds["enqueued:"+bucket].Int64(); err == nil {
 			stats.Enqueued += val
 		}

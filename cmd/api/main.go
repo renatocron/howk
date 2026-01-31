@@ -42,7 +42,7 @@ func main() {
 	publisher := broker.NewKafkaWebhookPublisher(kafkaBroker, cfg.Kafka.Topics)
 
 	// Initialize Redis hot state
-	hs, err := hotstate.NewRedisHotState(cfg.Redis)
+	hs, err := hotstate.NewRedisHotState(cfg.Redis, cfg.CircuitBreaker)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Redis hot state")
 	}

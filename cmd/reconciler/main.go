@@ -41,7 +41,7 @@ func main() {
 	}()
 
 	// Initialize Redis hot state
-	hs, err := hotstate.NewRedisHotState(cfg.Redis)
+	hs, err := hotstate.NewRedisHotState(cfg.Redis, cfg.CircuitBreaker)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Redis hot state")
 	}
