@@ -1,8 +1,37 @@
 # HOWK Failure Modes & Recovery
 
+## Index
+
+- [Infrastructure Failures](#infrastructure-failures)
+  - [1. Redis Unavailable](#1-redis-unavailable)
+  - [2. Kafka Broker Unavailable](#2-kafka-broker-unavailable)
+  - [3. Both Redis AND Kafka Unavailable](#3-both-redis-and-kafka-unavailable)
+- [Application Failures](#application-failures)
+  - [4. Worker Crashes Mid-Processing](#4-worker-crashes-mid-processing)
+  - [5. Scheduler Crashes](#5-scheduler-crashes)
+  - [6. API Crashes During Enqueue](#6-api-crashes-during-enqueue)
+- [Network Failures](#network-failures)
+  - [7. Webhook Endpoint Unreachable](#7-webhook-endpoint-unreachable)
+  - [8. Webhook Endpoint Slow (>30s)](#8-webhook-endpoint-slow-30s)
+  - [9. Webhook Endpoint Returns 429 (Rate Limited)](#9-webhook-endpoint-returns-429-rate-limited)
+  - [10. Webhook Endpoint Returns 4xx (Client Error)](#10-webhook-endpoint-returns-4xx-client-error)
+- [Data Corruption](#data-corruption)
+  - [11. Malformed Messages in Kafka](#11-malformed-messages-in-kafka)
+- [Circuit Breaker Edge Cases](#circuit-breaker-edge-cases)
+  - [12. Circuit Opens During High-Priority Delivery](#12-circuit-opens-during-high-priority-delivery)
+  - [13. Flapping Circuit (Open/Close Oscillation)](#13-flapping-circuit-openclose-oscillation)
+- [Reconciler Scenarios](#reconciler-scenarios)
+  - [14. Reconciler Started While Workers Running](#14-reconciler-started-while-workers-running)
+  - [15. Reconciler Fails Mid-Replay](#15-reconciler-fails-mid-replay)
+- [Dead Letter Queue (DLQ) Classification](#dead-letter-queue-dlq-classification)
+  - [16. Understanding DLQ Reason Types](#16-understanding-dlq-reason-types)
+- [Monitoring Checklist](#monitoring-checklist)
+
 ## Infrastructure Failures
 
 ### 1. Redis Unavailable
+<details>
+<summary>Details</summary>
 
 **Symptoms:**
 - Workers continue processing but lose idempotency protection
@@ -33,9 +62,13 @@
 - Redis Cluster for horizontal scaling
 - Regular backups (though state is rebuildable from Kafka)
 
+</details>
+
 ---
 
 ### 2. Kafka Broker Unavailable
+<details>
+<summary>Details</summary>
 
 **Symptoms:**
 - API returns 500 on webhook enqueue
@@ -58,9 +91,13 @@
 - Min in-sync replicas ≥ 2
 - Monitor Kafka cluster health
 
+</details>
+
 ---
 
 ### 3. Both Redis AND Kafka Unavailable
+<details>
+<summary>Details</summary>
 
 **Symptoms:**
 - Complete system outage
@@ -80,11 +117,15 @@
 - **Kafka**: If all replicas lost → PERMANENT DATA LOSS (webhooks lost)
 - **Redis**: No data loss (rebuildable from Kafka)
 
+</details>
+
 ---
 
 ## Application Failures
 
 ### 4. Worker Crashes Mid-Processing
+<details>
+<summary>Details</summary>
 
 **Scenario:** Worker crashes after delivering webhook but before committing Kafka offset
 
@@ -99,9 +140,13 @@
 - Another worker picks up message
 - Idempotency key prevents double-send
 
+</details>
+
 ---
 
 ### 5. Scheduler Crashes
+<details>
+<summary>Details</summary>
 
 **Scenario:** Scheduler crashes while processing retry batch
 
@@ -115,9 +160,13 @@
 - No data loss (retries persist in Redis)
 - Retries delayed by at most `poll_interval` (default 1s)
 
+</details>
+
 ---
 
 ### 6. API Crashes During Enqueue
+<details>
+<summary>Details</summary>
 
 **Scenario:** API crashes after publishing to Kafka but before returning 202
 
@@ -131,11 +180,15 @@
 - Client should use `idempotency_key` field
 - Future: Add idempotency check in API before publishing
 
+</details>
+
 ---
 
 ## Network Failures
 
 ### 7. Webhook Endpoint Unreachable
+<details>
+<summary>Details</summary>
 
 **Symptoms:**
 - Network timeout errors
@@ -153,9 +206,13 @@
 - After `recovery_timeout` → probe request sent
 - If endpoint recovers → circuit closes
 
+</details>
+
 ---
 
 ### 8. Webhook Endpoint Slow (>30s)
+<details>
+<summary>Details</summary>
 
 **Symptoms:**
 - Context deadline exceeded errors
@@ -170,9 +227,13 @@
 HOWK_DELIVERY_TIMEOUT=60s  # Increase if endpoints legitimately slow
 ```
 
+</details>
+
 ---
 
 ### 9. Webhook Endpoint Returns 429 (Rate Limited)
+<details>
+<summary>Details</summary>
 
 **Behavior:**
 - Marked as retryable (honors recipient's rate limit)
@@ -183,15 +244,19 @@ HOWK_DELIVERY_TIMEOUT=60s  # Increase if endpoints legitimately slow
 - Endpoints should return `Retry-After` header
 - Future: Honor `Retry-After` in retry delay calculation
 
+</details>
+
 ---
 
 ### 10. Webhook Endpoint Returns 4xx (Client Error)
+<details>
+<summary>Details</summary>
 
 **Symptoms:**
 - 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, etc.
 
 **Behavior:**
-- Marked as **non-retryable** (except 408 Timeout, 429 Rate Limited)
+- Marked as **non-retryable** (except 408 Timeout, 429 Too Many Requests)
 - Sent directly to DLQ with `reason_type: unrecoverable`
 - Does NOT consume retry attempts
 - Circuit breaker NOT affected (not endpoint's fault)
@@ -210,11 +275,15 @@ Attempt 1: 404 Not Found
 - Review webhook endpoint URL or credentials
 - May need to update tenant configuration
 
+</details>
+
 ---
 
 ## Data Corruption
 
 ### 11. Malformed Messages in Kafka
+<details>
+<summary>Details</summary>
 
 **Symptoms:**
 - JSON unmarshal errors in worker logs
@@ -241,11 +310,15 @@ grep "CRITICAL: Retry message has nil webhook" /var/log/howk/scheduler.log
 - Comprehensive unit tests
 - Kafka topic checksums enabled
 
+</details>
+
 ---
 
 ## Circuit Breaker Edge Cases
 
 ### 12. Circuit Opens During High-Priority Delivery
+<details>
+<summary>Details</summary>
 
 **Scenario:** Circuit opens right before critical webhook delivery
 
@@ -261,9 +334,13 @@ redis-cli DEL circuit:<endpoint_hash>
 
 **Future Feature:** Admin API to manually close circuits
 
+</details>
+
 ---
 
 ### 13. Flapping Circuit (Open/Close Oscillation)
+<details>
+<summary>Details</summary>
 
 **Symptoms:**
 - Circuit repeatedly opens and closes
@@ -278,11 +355,15 @@ HOWK_CIRCUIT_FAILURE_THRESHOLD=10
 HOWK_CIRCUIT_PROBE_INTERVAL=2m
 ```
 
+</details>
+
 ---
 
 ## Reconciler Scenarios
 
 ### 14. Reconciler Started While Workers Running
+<details>
+<summary>Details</summary>
 
 **Behavior:**
 - Safe: Workers and reconciler both write to Redis
@@ -293,9 +374,13 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 - Stop workers before running reconciler
 - Or accept minor inconsistencies (rebuilding anyway)
 
+</details>
+
 ---
 
 ### 15. Reconciler Fails Mid-Replay
+<details>
+<summary>Details</summary>
 
 **Behavior:**
 - Partial state rebuilt
@@ -308,11 +393,15 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 ./bin/howk-reconciler --from-beginning
 ```
 
+</details>
+
 ---
 
 ## Dead Letter Queue (DLQ) Classification
 
 ### 16. Understanding DLQ Reason Types
+<details>
+<summary>Details</summary>
 
 HOWK classifies webhooks sent to the dead letter queue (`howk.deadletter` topic) into two categories:
 
@@ -410,6 +499,8 @@ kafka-console-consumer --topic howk.deadletter \
 - Optionally transform payload if schema changed
 - Test with single webhook before bulk replay
 - May need to discard if issue can't be fixed (e.g., 410 Gone)
+
+</details>
 
 ---
 
