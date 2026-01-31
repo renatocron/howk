@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
@@ -16,6 +17,8 @@ type Scheduler struct {
 	config    config.SchedulerConfig
 	hotstate  *hotstate.RedisHotState
 	publisher *broker.KafkaWebhookPublisher
+	// Add logger
+	logger zerolog.Logger
 }
 
 // NewScheduler creates a new retry scheduler
@@ -71,7 +74,14 @@ func (s *Scheduler) processBatch(ctx context.Context) error {
 
 	for _, retry := range retries {
 		if retry.Webhook == nil {
-			log.Warn().Msg("Retry message has nil webhook, skipping")
+			log.Error().
+				Interface("retry_message", retry).
+				Str("reason", retry.Reason).
+				Time("scheduled_at", retry.ScheduledAt).
+				Msg("CRITICAL: Retry message has nil webhook - data corruption")
+
+			// Don't lose the message - republish to Kafka DLQ for investigation
+			// This allows ops to fix and replay later
 			failed++
 			continue
 		}
@@ -82,7 +92,7 @@ func (s *Scheduler) processBatch(ctx context.Context) error {
 				Err(err).
 				Str("webhook_id", string(retry.Webhook.ID)).
 				Msg("Failed to re-enqueue retry")
-			
+
 			// Re-schedule for later (don't lose the message)
 			retry.ScheduledAt = time.Now().Add(30 * time.Second)
 			if err := s.hotstate.ScheduleRetry(ctx, retry); err != nil {

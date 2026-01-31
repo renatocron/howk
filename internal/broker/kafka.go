@@ -242,30 +242,19 @@ func (p *KafkaWebhookPublisher) PublishResult(ctx context.Context, result *domai
 	return p.broker.Publish(ctx, p.topics.Results, msg)
 }
 
-func (p *KafkaWebhookPublisher) PublishDeadLetter(ctx context.Context, webhook *domain.Webhook, reason string) error {
-	type deadLetter struct {
-		Webhook *domain.Webhook `json:"webhook"`
-		Reason  string          `json:"reason"`
-		Time    time.Time       `json:"time"`
-	}
-
-	dl := deadLetter{
-		Webhook: webhook,
-		Reason:  reason,
-		Time:    time.Now(),
-	}
-
+func (p *KafkaWebhookPublisher) PublishDeadLetter(ctx context.Context, dl *domain.DeadLetter) error {
 	data, err := json.Marshal(dl)
 	if err != nil {
 		return fmt.Errorf("marshal dead letter: %w", err)
 	}
 
 	msg := Message{
-		Key:   []byte(webhook.ID),
+		Key:   []byte(dl.Webhook.ID),
 		Value: data,
 		Headers: map[string]string{
-			"config_id": string(webhook.ConfigID),
-			"reason":    reason,
+			"config_id":   string(dl.Webhook.ConfigID),
+			"reason":      dl.Reason,
+			"reason_type": string(dl.ReasonType),
 		},
 	}
 

@@ -38,7 +38,7 @@ type WebhookPublisher interface {
 	PublishResult(ctx context.Context, result *domain.DeliveryResult) error
 
 	// PublishDeadLetter publishes to the dead letter topic
-	PublishDeadLetter(ctx context.Context, webhook *domain.Webhook, reason string) error
+	PublishDeadLetter(ctx context.Context, dl *domain.DeadLetter) error
 
 	Close() error
 }

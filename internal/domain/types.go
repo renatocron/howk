@@ -132,3 +132,24 @@ func IsRetryable(statusCode int) bool {
 func IsSuccess(statusCode int) bool {
 	return statusCode >= 200 && statusCode < 300
 }
+
+// DeadLetterReason indicates why a webhook was sent to DLQ
+type DeadLetterReason string
+
+const (
+	// DLQReasonExhausted indicates the webhook exhausted all retry attempts
+	DLQReasonExhausted DeadLetterReason = "exhausted"
+
+	// DLQReasonUnrecoverable indicates an unrecoverable error (e.g., 4xx client error)
+	DLQReasonUnrecoverable DeadLetterReason = "unrecoverable"
+)
+
+// DeadLetter represents a webhook that has been sent to the dead letter queue
+type DeadLetter struct {
+	Webhook      *Webhook         `json:"webhook"`
+	Reason       string           `json:"reason"`        // Human-readable reason
+	ReasonType   DeadLetterReason `json:"reason_type"`   // Machine-readable type
+	LastError    string           `json:"last_error,omitempty"`
+	StatusCode   int              `json:"status_code,omitempty"`
+	Time         time.Time        `json:"time"`
+}

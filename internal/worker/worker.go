@@ -198,15 +198,37 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 		// Record stats
 		w.recordStats(ctx, "failed", &webhook)
 	} else {
-		// Exhausted retries
-		logger.Error().Msg("Retries exhausted, sending to dead letter")
+		// No retry - send to dead letter queue
+		// Determine the reason type
+		var reasonType domain.DeadLetterReason
+		var reason string
+
+		// Check if we exhausted attempts or hit an unrecoverable error
+		if webhook.Attempt >= webhook.MaxAttempts {
+			reasonType = domain.DLQReasonExhausted
+			reason = fmt.Sprintf("exhausted after %d attempts, last_status=%d", webhook.Attempt+1, result.StatusCode)
+			logger.Error().Msg("Retries exhausted, sending to dead letter")
+		} else {
+			// Non-retryable error (e.g., 4xx client error except 408/429)
+			reasonType = domain.DLQReasonUnrecoverable
+			reason = fmt.Sprintf("unrecoverable error: status=%d", result.StatusCode)
+			logger.Error().Msg("Unrecoverable error, sending to dead letter")
+		}
 
 		// Update status
 		w.updateStatus(ctx, &webhook, domain.StateExhausted, deliveryResult)
 
 		// Send to dead letter queue
-		reason := fmt.Sprintf("exhausted after %d attempts, last_status=%d", webhook.Attempt+1, result.StatusCode)
-		if err := w.publisher.PublishDeadLetter(ctx, &webhook, reason); err != nil {
+		deadLetter := &domain.DeadLetter{
+			Webhook:    &webhook,
+			Reason:     reason,
+			ReasonType: reasonType,
+			LastError:  deliveryResult.Error,
+			StatusCode: result.StatusCode,
+			Time:       time.Now(),
+		}
+
+		if err := w.publisher.PublishDeadLetter(ctx, deadLetter); err != nil {
 			logger.Error().Err(err).Msg("Failed to publish to dead letter")
 		}
 

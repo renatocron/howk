@@ -56,8 +56,8 @@ func (m *MockPublisher) PublishResult(ctx context.Context, result *domain.Delive
 	return args.Error(0)
 }
 
-func (m *MockPublisher) PublishDeadLetter(ctx context.Context, webhook *domain.Webhook, reason string) error {
-	args := m.Called(ctx, webhook, reason)
+func (m *MockPublisher) PublishDeadLetter(ctx context.Context, dl *domain.DeadLetter) error {
+	args := m.Called(ctx, dl)
 	return args.Error(0)
 }
 
