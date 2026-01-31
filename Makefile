@@ -1,4 +1,4 @@
-.PHONY: all build run-api run-worker run-scheduler test clean deps infra infra-down
+.PHONY: all build run-api run-worker run-scheduler test clean deps infra infra-down test-coverage-ci
 
 # Build all binaries
 all: build
@@ -62,6 +62,13 @@ test-ci: infra
 test-coverage:
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
+
+# Combined coverage for CI (unit + integration, requires infrastructure)
+test-coverage-ci:
+	go test -coverprofile=coverage.out -count=1 -p 1 -tags=integration ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+	@go tool cover -func=coverage.out | grep total
 
 # Dependencies
 deps:
