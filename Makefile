@@ -34,9 +34,19 @@ test-unit:
 
 test: test-unit
 
+# Coverage packages to exclude (entry points and test utilities)
+COVERAGE_EXCLUDES := cmd/ internal/api/ internal/reconciler/ internal/testutil/
+
+# Filter coverage file to exclude certain packages
+define filter_coverage
+	grep -v -E "$(shell echo $(COVERAGE_EXCLUDES) | tr ' ' '|')" coverage.out > coverage.filtered.out
+	mv coverage.filtered.out coverage.out
+endef
+
 # Unit test coverage
 test-unit-coverage:
 	go test -short -coverprofile=coverage.out ./...
+	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 	go tool cover -func=coverage.out | grep total
@@ -60,11 +70,15 @@ test-ci: infra
 
 test-coverage:
 	go test -coverprofile=coverage.out ./...
+	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+	@go tool cover -func=coverage.out | grep total
 
 # Combined coverage for CI (unit + integration, requires infrastructure)
 test-coverage-ci:
 	go test -race -coverprofile=coverage.out -count=1 -p 1 -tags=integration -timeout=10m ./...
+	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 	@go tool cover -func=coverage.out | grep total
