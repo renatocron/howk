@@ -78,7 +78,7 @@ func TestScheduler_PopAndLockRetries(t *testing.T) {
 	webhook.Attempt = 1
 
 	// Store data and schedule retry
-	err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+	err := hs.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL)
 	require.NoError(t, err)
 	err = hs.ScheduleRetry(ctx, webhook.ID, webhook.Attempt, time.Now().Add(-1*time.Second), "test")
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestScheduler_NotDueYet(t *testing.T) {
 
 	// Schedule retry for future
 	webhook := testutil.NewTestWebhook("https://example.com/webhook")
-	err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+	err := hs.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL)
 	require.NoError(t, err)
 	err = hs.ScheduleRetry(ctx, webhook.ID, 1, time.Now().Add(10*time.Hour), "test future")
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestScheduler_ReEnqueueToKafka(t *testing.T) {
 		webhook := testutil.NewTestWebhook("https://example.com/webhook")
 		webhooks[i] = webhook
 
-		err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+		err := hs.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL)
 		require.NoError(t, err)
 		err = hs.ScheduleRetry(ctx, webhook.ID, i+1, time.Now().Add(-1*time.Second), "test batch")
 		require.NoError(t, err)
@@ -287,7 +287,7 @@ func TestScheduler_BatchSizeLimit(t *testing.T) {
 		webhook := testutil.NewTestWebhook("https://example.com/webhook")
 		webhooks[i] = webhook
 
-		err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+		err := hs.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL)
 		require.NoError(t, err)
 		err = hs.ScheduleRetry(ctx, webhook.ID, i+1, time.Now().Add(-1*time.Second), "test batch limit")
 		require.NoError(t, err)

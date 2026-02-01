@@ -84,7 +84,7 @@ func (m *MockHotState) GetStatus(ctx context.Context, webhookID domain.WebhookID
 	return args.Get(0).(*domain.WebhookStatus), args.Error(1)
 }
 
-func (m *MockHotState) StoreRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error {
+func (m *MockHotState) EnsureRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error {
 	args := m.Called(ctx, webhook, ttl)
 	return args.Error(0)
 }

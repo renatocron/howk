@@ -15,8 +15,9 @@ import (
 
 // Reconciler rebuilds Redis state from Kafka topics
 type Reconciler struct {
-	config   config.KafkaConfig
-	hotstate hotstate.HotState
+	config    config.KafkaConfig
+	hotstate  hotstate.HotState
+	ttlConfig config.TTLConfig
 }
 
 // NewReconciler creates a new reconciler
@@ -203,8 +204,8 @@ func (r *Reconciler) scheduleRetry(ctx context.Context, result *domain.DeliveryR
 		result.Webhook.ScheduledAt = result.NextRetryAt
 	}
 
-	// NEW: Use StoreRetryData first (with per-reference key)
-	if err := r.hotstate.StoreRetryData(ctx, result.Webhook, 7*24*time.Hour); err != nil {
+	// NEW: Use EnsureRetryData (lazy save - only writes if missing)
+	if err := r.hotstate.EnsureRetryData(ctx, result.Webhook, r.ttlConfig.RetryDataTTL); err != nil {
 		return err
 	}
 

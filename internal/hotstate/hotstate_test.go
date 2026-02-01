@@ -247,7 +247,7 @@ func TestRedisHotState_ScheduleRetry(t *testing.T) {
 	require.NoError(t, mockClient.ExpectationsWereMet())
 }
 
-func TestRedisHotState_StoreAndGetRetryData(t *testing.T) {
+func TestRedisHotState_EnsureAndGetRetryData(t *testing.T) {
 	ctx := context.Background()
 	webhook := &domain.Webhook{
 		ID:       domain.WebhookID("wh-123"),
@@ -259,13 +259,19 @@ func TestRedisHotState_StoreAndGetRetryData(t *testing.T) {
 
 	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
 
-	// Store data and then retrieve it to verify round-trip
-	// Use regex matching for the compressed data
+	// Test Case 1: Key doesn't exist - should call EXPIRE (returns false) then SET
+	mockClient.ExpectExpire("retry_data:wh-123", ttl).SetVal(false) // Key doesn't exist
 	mockClient.Regexp().ExpectSet("retry_data:wh-123", `^.+$`, ttl).SetVal("OK")
-	err := state.StoreRetryData(ctx, webhook, ttl)
+	err := state.EnsureRetryData(ctx, webhook, ttl)
 	require.NoError(t, err)
-
 	require.NoError(t, mockClient.ExpectationsWereMet())
+
+	// Test Case 2: Key exists - should only call EXPIRE (returns true), no SET
+	state2, mockClient2 := newMockedHotState(t, defaultCircuitConfig)
+	mockClient2.ExpectExpire("retry_data:wh-123", ttl).SetVal(true) // Key exists
+	err = state2.EnsureRetryData(ctx, webhook, ttl)
+	require.NoError(t, err)
+	require.NoError(t, mockClient2.ExpectationsWereMet())
 }
 
 func TestRedisHotState_DeleteRetryData(t *testing.T) {

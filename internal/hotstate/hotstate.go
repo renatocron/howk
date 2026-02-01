@@ -16,8 +16,10 @@ type HotState interface {
 	GetStatus(ctx context.Context, webhookID domain.WebhookID) (*domain.WebhookStatus, error)
 
 	// Retry scheduling (Reference-Based with Visibility Timeout)
-	// StoreRetryData stores the compressed webhook data (one per webhook, refreshed TTL on each call)
-	StoreRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error
+	// EnsureRetryData ensures the webhook data exists in Redis.
+	// If it exists, it only refreshes the TTL (efficient - no compression/payload transfer).
+	// If it does not exist, it compresses and stores it.
+	EnsureRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error
 	// ScheduleRetry schedules the reference in ZSET
 	ScheduleRetry(ctx context.Context, webhookID domain.WebhookID, attempt int, scheduledAt time.Time, reason string) error
 	// PopAndLockRetries atomically pops due retries and pushes their score to the future (visibility timeout)

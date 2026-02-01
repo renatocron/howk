@@ -41,7 +41,7 @@ func TestScheduleRetry_PopAndLockRetries(t *testing.T) {
 	webhook.Attempt = 1
 
 	// Store retry data first
-	err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+	err := hs.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL)
 	require.NoError(t, err)
 
 	// Schedule retry reference
@@ -87,13 +87,13 @@ func TestPopAndLockRetries_OnlyDue(t *testing.T) {
 
 	// Schedule one in the past (due), one in the future (not due)
 	whPast := testutil.NewTestWebhook("http://example.com/past")
-	err := hs.StoreRetryData(ctx, whPast, 7*24*time.Hour)
+	err := hs.EnsureRetryData(ctx, whPast, 7*24*time.Hour)
 	require.NoError(t, err)
 	err = hs.ScheduleRetry(ctx, whPast.ID, 1, time.Now().Add(-100*time.Millisecond), "past")
 	require.NoError(t, err)
 
 	whFuture := testutil.NewTestWebhook("http://example.com/future")
-	err = hs.StoreRetryData(ctx, whFuture, 7*24*time.Hour)
+	err = hs.EnsureRetryData(ctx, whFuture, 7*24*time.Hour)
 	require.NoError(t, err)
 	err = hs.ScheduleRetry(ctx, whFuture.ID, 1, time.Now().Add(1*time.Hour), "future")
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestPopAndLockRetries_BatchSize(t *testing.T) {
 	webhooks := make([]*domain.Webhook, 5)
 	for i := 0; i < 5; i++ {
 		webhooks[i] = testutil.NewTestWebhook("http://example.com/batch")
-		err := hs.StoreRetryData(ctx, webhooks[i], 7*24*time.Hour)
+		err := hs.EnsureRetryData(ctx, webhooks[i], 7*24*time.Hour)
 		require.NoError(t, err)
 		err = hs.ScheduleRetry(ctx, webhooks[i].ID, i, time.Now().Add(-10*time.Second), "batch") // All due
 		require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestRetryDataLifecycle(t *testing.T) {
 	webhook := testutil.NewTestWebhook("http://example.com/lifecycle")
 
 	// 1. Store data
-	err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+	err := hs.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL)
 	require.NoError(t, err)
 
 	// 2. Schedule multiple attempts

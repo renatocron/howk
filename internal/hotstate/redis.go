@@ -199,16 +199,30 @@ func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.E
 
 // --- Retry Scheduling (New Implementation with Visibility Timeout) ---
 
-// StoreRetryData stores the compressed webhook data (one per webhook)
-// The TTL is refreshed on each call, keeping data alive for active retries
-func (r *RedisHotState) StoreRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error {
+// EnsureRetryData ensures the webhook data exists in Redis.
+// If it exists, it only refreshes the TTL (efficient - no compression/payload transfer).
+// If it does not exist, it compresses and stores it.
+func (r *RedisHotState) EnsureRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error {
+	key := retryDataPrefix + string(webhook.ID)
+
+	// 1. Try to refresh TTL first (Optimistic: most retries are subsequent attempts)
+	// EXPIRE returns 1 (true) if key exists, 0 (false) if not
+	exists, err := r.rdb.Expire(ctx, key, ttl).Result()
+	if err != nil {
+		return fmt.Errorf("refresh retry data ttl: %w", err)
+	}
+
+	if exists {
+		// Data exists and TTL updated. We are done - no compression/payload transfer needed.
+		return nil
+	}
+
+	// 2. Data missing (first retry or expired), perform full save with compression
 	compressed, err := compressWebhook(webhook)
 	if err != nil {
 		return err
 	}
 
-	// One key per webhook: "retry_data:webhook_id"
-	key := retryDataPrefix + string(webhook.ID)
 	return r.rdb.Set(ctx, key, compressed, ttl).Err()
 }
 

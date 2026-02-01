@@ -286,8 +286,8 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 
 // scheduleRetry stores retry data and schedules the reference in ZSET
 func (w *Worker) scheduleRetry(ctx context.Context, webhook *domain.Webhook, scheduledAt time.Time, reason string) error {
-	// 1. Store Data (Compressed) - one per webhook, TTL refreshed
-	if err := w.hotstate.StoreRetryData(ctx, webhook, w.config.TTL.RetryDataTTL); err != nil {
+	// 1. Ensure Data (Lazy) - only writes if missing, otherwise refreshes TTL (no compression/payload transfer)
+	if err := w.hotstate.EnsureRetryData(ctx, webhook, w.config.TTL.RetryDataTTL); err != nil {
 		return err
 	}
 	// 2. Schedule Reference in ZSET
