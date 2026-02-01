@@ -14,6 +14,7 @@ import (
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/worker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -277,6 +278,10 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 	mockDeliveryClient := new(MockDeliveryClient)
 	mockRetryStrategy := new(MockRetryStrategy)
 
+	// Create a test script engine with disabled config (scripts won't execute)
+	testScriptLoader := script.NewLoader()
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader)
+
 	w := worker.NewWorker(
 		cfg,
 		mockBroker,         // Passed as broker.Broker interface
@@ -285,6 +290,7 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 		mockCircuitBreaker, // Passed as hotstate.CircuitBreakerChecker interface
 		mockDeliveryClient, // Passed as delivery.Deliverer interface
 		mockRetryStrategy,  // Passed as retry.Retrier interface
+		testScriptEngine,   // Passed as *script.Engine
 	)
 
 	return w, mockBroker, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy
@@ -300,6 +306,10 @@ func TestNewWorker(t *testing.T) {
 	mockDeliveryClient := new(MockDeliveryClient)
 	mockRetryStrategy := new(MockRetryStrategy)
 
+	// Create a test script engine with disabled config
+	testScriptLoader := script.NewLoader()
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader)
+
 	w := worker.NewWorker(
 		cfg,
 		mockBroker,
@@ -308,6 +318,7 @@ func TestNewWorker(t *testing.T) {
 		mockCircuitBreaker,
 		mockDeliveryClient,
 		mockRetryStrategy,
+		testScriptEngine,
 	)
 
 	assert.NotNil(t, w)

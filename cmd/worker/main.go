@@ -16,6 +16,7 @@ import (
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/retry"
+	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/worker"
 )
 
@@ -69,8 +70,13 @@ func main() {
 	// Initialize retry strategy
 	rs := retry.NewStrategy(cfg.Retry)
 
+	// Initialize script engine
+	scriptLoader := script.NewLoader()
+	scriptEngine := script.NewEngine(cfg.Lua, scriptLoader)
+	defer scriptEngine.Close()
+
 	// Create worker
-	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, cb, dc, rs)
+	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, cb, dc, rs, scriptEngine)
 
 	// Run worker
 	go func() {

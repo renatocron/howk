@@ -14,17 +14,19 @@ import (
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/retry"
+	"github.com/howk/howk/internal/script"
 )
 
 // Worker processes webhooks from Kafka and delivers them
 type Worker struct {
-	config    *config.Config
-	broker    broker.Broker
-	publisher broker.WebhookPublisher
-	hotstate  hotstate.HotState
-	circuit   hotstate.CircuitBreakerChecker
-	delivery  delivery.Deliverer
-	retry     retry.Retrier
+	config       *config.Config
+	broker       broker.Broker
+	publisher    broker.WebhookPublisher
+	hotstate     hotstate.HotState
+	circuit      hotstate.CircuitBreakerChecker
+	delivery     delivery.Deliverer
+	retry        retry.Retrier
+	scriptEngine *script.Engine
 }
 
 // NewWorker creates a new worker
@@ -36,15 +38,17 @@ func NewWorker(
 	cb hotstate.CircuitBreakerChecker,
 	dc delivery.Deliverer,
 	rs retry.Retrier,
+	se *script.Engine,
 ) *Worker {
 	return &Worker{
-		config:    cfg,
-		broker:    brk,
-		publisher: pub,
-		hotstate:  hs,
-		circuit:   cb,
-		delivery:  dc,
-		retry:     rs,
+		config:       cfg,
+		broker:       brk,
+		publisher:    pub,
+		hotstate:     hs,
+		circuit:      cb,
+		delivery:     dc,
+		retry:        rs,
+		scriptEngine: se,
 	}
 }
 
@@ -99,6 +103,27 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 
 	// Update status to delivering
 	w.updateStatus(ctx, &webhook, domain.StateDelivering, nil)
+
+	// Execute script transformation if configured
+	if webhook.ScriptHash != "" {
+		// Safety: DLQ if scripts disabled but transformation expected
+		if !w.config.Lua.Enabled {
+			logger.Warn().Msg("Script execution disabled but ScriptHash set, sending to DLQ")
+			return w.sendToDLQForScriptDisabled(ctx, &webhook)
+		}
+
+		// Execute script
+		logger.Debug().Str("script_hash", webhook.ScriptHash).Msg("Executing script transformation")
+		transformed, scriptErr := w.scriptEngine.Execute(ctx, &webhook)
+		if scriptErr != nil {
+			logger.Error().Err(scriptErr).Msg("Script execution failed")
+			return w.handleScriptError(ctx, &webhook, scriptErr)
+		}
+
+		// Use transformed webhook for delivery
+		webhook = *transformed
+		logger.Debug().Msg("Script transformation applied successfully")
+	}
 
 	// Deliver the webhook
 	result := w.delivery.Deliver(ctx, &webhook)
@@ -314,6 +339,133 @@ func (w *Worker) recordStats(ctx context.Context, stat string, webhook *domain.W
 	if err := w.hotstate.AddToHLL(ctx, "endpoints:"+bucket, string(webhook.EndpointHash)); err != nil {
 		log.Warn().Err(err).Msg("Failed to add to HLL")
 	}
+}
+
+// handleScriptError handles errors from script execution
+func (w *Worker) handleScriptError(ctx context.Context, webhook *domain.Webhook, scriptErr error) error {
+	logger := log.With().
+		Str("webhook_id", string(webhook.ID)).
+		Str("config_id", string(webhook.ConfigID)).
+		Logger()
+
+	// Extract script error type
+	scriptError, ok := scriptErr.(*script.ScriptError)
+	if !ok {
+		// Unknown error type, send to DLQ
+		logger.Error().Err(scriptErr).Msg("Unknown script error type, sending to DLQ")
+		return w.sendToDLQ(ctx, webhook, domain.DLQReasonScriptRuntimeError, scriptErr.Error())
+	}
+
+	// Determine if error is retryable
+	if scriptError.Type.IsRetryable() {
+		// Transient error (Redis/HTTP unavailable) - retry
+		logger.Warn().Str("error_type", string(scriptError.Type)).Msg("Retryable script error, scheduling retry")
+
+		// Schedule retry with normal backoff
+		circuitState := domain.CircuitClosed // Script errors don't affect circuit
+		nextRetryAt := w.retry.NextRetryAt(webhook.Attempt, circuitState)
+		webhook.Attempt++
+		webhook.ScheduledAt = nextRetryAt
+
+		retryMsg := &hotstate.RetryMessage{
+			Webhook:     webhook,
+			ScheduledAt: nextRetryAt,
+			Reason:      fmt.Sprintf("script_error: %s", scriptError.Type),
+		}
+
+		if err := w.hotstate.ScheduleRetry(ctx, retryMsg); err != nil {
+			logger.Error().Err(err).Msg("Failed to schedule retry for script error")
+		}
+
+		// Update status to failed
+		w.updateStatus(ctx, webhook, domain.StateFailed, &domain.DeliveryResult{
+			WebhookID:   webhook.ID,
+			ConfigID:    webhook.ConfigID,
+			Endpoint:    webhook.Endpoint,
+			Attempt:     webhook.Attempt,
+			Success:     false,
+			Error:       scriptErr.Error(),
+			ShouldRetry: true,
+			NextRetryAt: nextRetryAt,
+			Timestamp:   time.Now(),
+		})
+
+		w.recordStats(ctx, "failed", webhook)
+		return nil
+	}
+
+	// Non-retryable script error - send to DLQ
+	logger.Error().Str("error_type", string(scriptError.Type)).Msg("Non-retryable script error, sending to DLQ")
+
+	// Map script error type to DLQ reason
+	var dlqReason domain.DeadLetterReason
+	switch scriptError.Type {
+	case script.ScriptErrorNotFound:
+		dlqReason = domain.DLQReasonScriptNotFound
+	case script.ScriptErrorSyntax:
+		dlqReason = domain.DLQReasonScriptSyntaxError
+	case script.ScriptErrorRuntime:
+		dlqReason = domain.DLQReasonScriptRuntimeError
+	case script.ScriptErrorTimeout:
+		dlqReason = domain.DLQReasonScriptTimeout
+	case script.ScriptErrorMemoryLimit:
+		dlqReason = domain.DLQReasonScriptMemoryLimit
+	case script.ScriptErrorModuleCrypto:
+		// Check if crypto key not found
+		if scriptError.Message == "crypto key not found" || scriptError.Cause != nil && scriptError.Cause.Error() == "key not found" {
+			dlqReason = domain.DLQReasonCryptoKeyNotFound
+		} else {
+			dlqReason = domain.DLQReasonScriptRuntimeError
+		}
+	case script.ScriptErrorInvalidOutput:
+		dlqReason = domain.DLQReasonScriptInvalidOutput
+	default:
+		dlqReason = domain.DLQReasonScriptRuntimeError
+	}
+
+	return w.sendToDLQ(ctx, webhook, dlqReason, scriptErr.Error())
+}
+
+// sendToDLQForScriptDisabled sends a webhook to DLQ when scripts are disabled
+func (w *Worker) sendToDLQForScriptDisabled(ctx context.Context, webhook *domain.Webhook) error {
+	return w.sendToDLQ(ctx, webhook, domain.DLQReasonScriptDisabled,
+		"Script execution is disabled but ScriptHash is set - this would leak raw/untransformed payload")
+}
+
+// sendToDLQ is a helper to send webhooks to the dead letter queue
+func (w *Worker) sendToDLQ(ctx context.Context, webhook *domain.Webhook, reasonType domain.DeadLetterReason, reasonMsg string) error {
+	logger := log.With().
+		Str("webhook_id", string(webhook.ID)).
+		Str("reason", string(reasonType)).
+		Logger()
+
+	deadLetter := &domain.DeadLetter{
+		Webhook:    webhook,
+		Reason:     reasonMsg,
+		ReasonType: reasonType,
+		Time:       time.Now(),
+	}
+
+	if err := w.publisher.PublishDeadLetter(ctx, deadLetter); err != nil {
+		logger.Error().Err(err).Msg("Failed to publish to dead letter queue")
+		return err
+	}
+
+	// Update status to exhausted
+	w.updateStatus(ctx, webhook, domain.StateExhausted, &domain.DeliveryResult{
+		WebhookID: webhook.ID,
+		ConfigID:  webhook.ConfigID,
+		Endpoint:  webhook.Endpoint,
+		Attempt:   webhook.Attempt,
+		Success:   false,
+		Error:     reasonMsg,
+		Timestamp: time.Now(),
+	})
+
+	w.recordStats(ctx, "exhausted", webhook)
+
+	logger.Warn().Msg("Webhook sent to dead letter queue")
+	return nil
 }
 
 func (w *Worker) GetConfig() *config.Config {
