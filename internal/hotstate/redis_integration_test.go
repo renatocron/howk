@@ -41,7 +41,7 @@ func TestScheduleRetry_PopAndLockRetries(t *testing.T) {
 	webhook.Attempt = 1
 
 	// Store retry data first
-	err := hs.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL)
+	err := hs.EnsureRetryData(ctx, webhook, 7*24*time.Hour)
 	require.NoError(t, err)
 
 	// Schedule retry reference
@@ -157,7 +157,7 @@ func TestRetryDataLifecycle(t *testing.T) {
 	webhook := testutil.NewTestWebhook("http://example.com/lifecycle")
 
 	// 1. Store data
-	err := hs.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL)
+	err := hs.EnsureRetryData(ctx, webhook, 7*24*time.Hour)
 	require.NoError(t, err)
 
 	// 2. Schedule multiple attempts
