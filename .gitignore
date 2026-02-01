@@ -1,5 +1,9 @@
 # Binaries
 bin/
+/api
+/worker
+/scheduler
+/reconciler
 *.exe
 *.exe~
 *.dll

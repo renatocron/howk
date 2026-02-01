@@ -202,7 +202,7 @@ func (s *Server) buildWebhook(configID domain.ConfigID, req *EnqueueRequest) *do
 		maxAttempts = 20 // Default
 	}
 
-	return &domain.Webhook{
+	webhook := &domain.Webhook{
 		ID:             domain.WebhookID("wh_" + ulid.Make().String()),
 		ConfigID:       configID,
 		Endpoint:       req.Endpoint,
@@ -216,6 +216,23 @@ func (s *Server) buildWebhook(configID domain.ConfigID, req *EnqueueRequest) *do
 		CreatedAt:      time.Now(),
 		ScheduledAt:    time.Now(),
 	}
+
+	// Check if script exists for this config_id and set ScriptHash
+	ctx := context.Background()
+	scriptJSON, err := s.hotstate.GetScript(ctx, configID)
+	if err == nil && scriptJSON != "" {
+		// Parse script to get hash
+		var scriptConfig script.ScriptConfig
+		if err := json.Unmarshal([]byte(scriptJSON), &scriptConfig); err == nil {
+			webhook.ScriptHash = scriptConfig.Hash
+			log.Debug().
+				Str("config_id", string(configID)).
+				Str("script_hash", scriptConfig.Hash).
+				Msg("Auto-applied script hash to webhook")
+		}
+	}
+
+	return webhook
 }
 
 func requestLogger() gin.HandlerFunc {

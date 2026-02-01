@@ -112,6 +112,21 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 			return w.sendToDLQForScriptDisabled(ctx, &webhook)
 		}
 
+		// Try to load script from Redis if not in cache
+		// This handles the case where the worker starts before scripts are loaded
+		scriptJSON, err := w.hotstate.GetScript(ctx, webhook.ConfigID)
+		if err == nil && scriptJSON != "" {
+			// Parse and load into script engine's loader
+			var scriptConfig script.ScriptConfig
+			if err := json.Unmarshal([]byte(scriptJSON), &scriptConfig); err == nil {
+				w.scriptEngine.GetLoader().SetScript(&scriptConfig)
+				logger.Debug().
+					Str("config_id", string(webhook.ConfigID)).
+					Str("script_hash", scriptConfig.Hash).
+					Msg("Loaded script from Redis into cache")
+			}
+		}
+
 		// Execute script
 		logger.Debug().Str("script_hash", webhook.ScriptHash).Msg("Executing script transformation")
 		transformed, scriptErr := w.scriptEngine.Execute(ctx, &webhook)

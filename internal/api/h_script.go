@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/script"
 )
@@ -173,12 +174,58 @@ func (s *Server) handleTestScript(c *gin.Context) {
 		return
 	}
 
-	// TODO: Execute script in sandboxed environment (Phase 3)
-	// For now, just validate syntax and return success
+	// Create a temporary webhook for testing
+	payloadJSON, err := json.Marshal(req.Payload)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
+
+	testWebhook := &domain.Webhook{
+		ID:       domain.WebhookID("test_" + time.Now().Format("20060102150405")),
+		ConfigID: domain.ConfigID(c.Param("config_id")),
+		Payload:  json.RawMessage(payloadJSON),
+		Headers:  req.Headers,
+		Attempt:  1,
+	}
+
+	// Load script into temporary loader for testing
+	tempLoader := script.NewLoader()
+	tempLoader.SetScript(&script.ScriptConfig{
+		ConfigID: testWebhook.ConfigID,
+		LuaCode:  req.LuaCode,
+		Hash:     "test",
+	})
+
+	// Create temporary engine with test config (use defaults)
+	testEngine := script.NewEngine(config.LuaConfig{
+		Enabled:       true,
+		Timeout:       500 * time.Millisecond,
+		MemoryLimitMB: 50,
+	}, tempLoader)
+	defer testEngine.Close()
+
+	// Execute script
+	transformed, err := testEngine.Execute(c.Request.Context(), testWebhook)
+	if err != nil {
+		c.JSON(http.StatusOK, TestScriptResponse{
+			Success:         false,
+			Error:           err.Error(),
+			ExecutionTimeMs: float64(time.Since(start).Microseconds()) / 1000.0,
+		})
+		return
+	}
+
+	// Use transformed payload if available, otherwise use original
+	transformedPayload := req.Payload
+	if len(transformed.Payload) > 0 {
+		transformedPayload = transformed.Payload
+	}
+
 	c.JSON(http.StatusOK, TestScriptResponse{
 		Success:            true,
-		TransformedPayload: req.Payload, // Passthrough for now
-		TransformedHeaders: req.Headers,
+		TransformedPayload: transformedPayload,
+		TransformedHeaders: transformed.Headers,
 		ExecutionTimeMs:    float64(time.Since(start).Microseconds()) / 1000.0,
 	})
 }

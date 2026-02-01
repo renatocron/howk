@@ -297,3 +297,8 @@ func (e *Engine) Close() error {
 	// Lua states will be garbage collected
 	return nil
 }
+
+// GetLoader returns the script loader (for loading scripts from Redis)
+func (e *Engine) GetLoader() *Loader {
+	return e.loader
+}
