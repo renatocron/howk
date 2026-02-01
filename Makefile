@@ -45,7 +45,7 @@ endef
 
 # Unit test coverage
 test-unit-coverage:
-	go test -short -coverprofile=coverage.out ./...
+	go test -short -coverprofile=coverage.out -coverpkg=./... ./...
 	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
@@ -69,7 +69,7 @@ test-ci: infra
 	go test -v -race -count=1 -p 1 -tags=integration -timeout=10m ./...
 
 test-coverage:
-	go test -coverprofile=coverage.out ./...
+	go test -coverprofile=coverage.out -coverpkg=./... ./...
 	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
@@ -77,7 +77,7 @@ test-coverage:
 
 # Combined coverage for CI (unit + integration, requires infrastructure)
 test-coverage-ci:
-	go test -race -coverprofile=coverage.out -count=1 -p 1 -tags=integration -timeout=10m ./...
+	go test -race -coverprofile=coverage.out -coverpkg=./... -count=1 -p 1 -tags=integration -timeout=10m ./...
 	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
