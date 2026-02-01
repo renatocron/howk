@@ -8,6 +8,7 @@ import (
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
+	"github.com/rs/zerolog"
 )
 
 func TestEngine_Execute_SimpleHeaderTransform(t *testing.T) {
@@ -23,7 +24,7 @@ func TestEngine_Execute_SimpleHeaderTransform(t *testing.T) {
 		Hash:     "abc123",
 	})
 
-	engine := NewEngine(cfg, loader, nil, nil)
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
 	defer engine.Close()
 
 	webhook := &domain.Webhook{
@@ -60,7 +61,7 @@ func TestEngine_Execute_JSONTransform(t *testing.T) {
 		Hash: "def456",
 	})
 
-	engine := NewEngine(cfg, loader, nil, nil)
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
 	defer engine.Close()
 
 	webhook := &domain.Webhook{
@@ -109,7 +110,7 @@ func TestEngine_Execute_Base64(t *testing.T) {
 		Hash: "ghi789",
 	})
 
-	engine := NewEngine(cfg, loader, nil, nil)
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
 	defer engine.Close()
 
 	webhook := &domain.Webhook{
@@ -149,7 +150,7 @@ func TestEngine_Execute_MetadataAccess(t *testing.T) {
 		Hash: "jkl012",
 	})
 
-	engine := NewEngine(cfg, loader, nil, nil)
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
 	defer engine.Close()
 
 	webhook := &domain.Webhook{
@@ -185,7 +186,7 @@ func TestEngine_Execute_ScriptNotFound(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	engine := NewEngine(cfg, loader, nil, nil)
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
 	defer engine.Close()
 
 	webhook := &domain.Webhook{
@@ -221,7 +222,7 @@ func TestEngine_Execute_Disabled(t *testing.T) {
 		Hash:     "xyz",
 	})
 
-	engine := NewEngine(cfg, loader, nil, nil)
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
 	defer engine.Close()
 
 	webhook := &domain.Webhook{
@@ -262,7 +263,7 @@ func TestEngine_Execute_Timeout(t *testing.T) {
 		Hash: "timeout_test",
 	})
 
-	engine := NewEngine(cfg, loader, nil, nil)
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
 	defer engine.Close()
 
 	webhook := &domain.Webhook{
@@ -298,7 +299,7 @@ func TestEngine_Execute_RuntimeError(t *testing.T) {
 		Hash:     "error_test",
 	})
 
-	engine := NewEngine(cfg, loader, nil, nil)
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
 	defer engine.Close()
 
 	webhook := &domain.Webhook{

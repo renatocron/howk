@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -43,7 +44,7 @@ func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker,
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil)
+	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
 	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 
@@ -198,7 +199,7 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil)
+	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
 	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 
@@ -333,7 +334,7 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil)
+	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
 	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 

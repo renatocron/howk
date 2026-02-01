@@ -9,11 +9,12 @@ import (
 
 	lua "github.com/yuin/gopher-lua"
 	luajson "layeh.com/gopher-json"
+	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/script/modules"
-	"github.com/redis/go-redis/v9"
 )
 
 // Engine executes Lua scripts in a sandboxed environment with pooling
@@ -22,16 +23,30 @@ type Engine struct {
 	pool    *sync.Pool
 	loader  *Loader
 	crypto  *modules.CryptoModule
+	http    *modules.HTTPModule
+	log     *modules.LogModule
 	rdb     *redis.Client
+	logger  zerolog.Logger
 }
 
-// NewEngine creates a new Lua script engine with optional crypto and redis modules
-func NewEngine(cfg config.LuaConfig, loader *Loader, crypto *modules.CryptoModule, rdb *redis.Client) *Engine {
+// NewEngine creates a new Lua script engine with optional crypto, http, and redis modules
+func NewEngine(cfg config.LuaConfig, loader *Loader, crypto *modules.CryptoModule, http *modules.HTTPModule, rdb *redis.Client, logger zerolog.Logger) *Engine {
+	// Create default logger if not provided
+	if logger.GetLevel() == 0 {
+		logger = zerolog.New(nil).Level(zerolog.Disabled)
+	}
+	
+	// Create log module
+	logModule := modules.NewLogModule(logger)
+	
 	engine := &Engine{
 		config: cfg,
 		loader: loader,
 		crypto: crypto,
+		http:   http,
+		log:    logModule,
 		rdb:    rdb,
+		logger: logger,
 	}
 
 	// Initialize state pool
@@ -85,8 +100,8 @@ func (e *Engine) newLuaState() *lua.LState {
 	preloadTable.RawSetString("debug", lua.LNil)
 
 	// Load built-in modules
-	luajson.Preload(L)    // JSON encode/decode
-	modules.LoadBase64(L) // Base64 encode/decode
+	luajson.Preload(L)     // JSON encode/decode
+	modules.LoadBase64(L)  // Base64 encode/decode
 
 	// Load crypto module if available
 	if e.crypto != nil {
@@ -100,6 +115,20 @@ func (e *Engine) newLuaState() *lua.LState {
 func (e *Engine) loadKVModule(L *lua.LState, configID string) {
 	if e.rdb != nil {
 		modules.LoadKV(L, e.rdb, configID)
+	}
+}
+
+// loadHTTPModule loads the HTTP module for a specific namespace
+func (e *Engine) loadHTTPModule(L *lua.LState, namespace string) {
+	if e.http != nil {
+		e.http.LoadHTTP(L, namespace)
+	}
+}
+
+// loadLogModule loads the log module for a specific webhook
+func (e *Engine) loadLogModule(L *lua.LState, webhookID string) {
+	if e.log != nil {
+		e.log.LoadLog(L, webhookID)
 	}
 }
 
@@ -123,6 +152,9 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 		}
 	}
 
+	// Extract namespace from config_id
+	namespace := extractNamespace(string(webhook.ConfigID))
+
 	// Set up timeout that covers the entire execution
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)
 	defer cancel()
@@ -139,8 +171,10 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 			e.pool.Put(L)
 		}()
 
-		// Load KV module for this specific config_id
+		// Load modules for this specific webhook
 		e.loadKVModule(L, string(webhook.ConfigID))
+		e.loadHTTPModule(L, namespace)
+		e.loadLogModule(L, string(webhook.ID))
 
 		// Pass the timeout context to the script executor
 		result, err := e.executeScript(timeoutCtx, L, scriptConfig.LuaCode, webhook)
@@ -340,4 +374,29 @@ func (e *Engine) GetLoader() *Loader {
 // GetCrypto returns the crypto module (for testing)
 func (e *Engine) GetCrypto() *modules.CryptoModule {
 	return e.crypto
+}
+
+// GetHTTP returns the HTTP module (for testing)
+func (e *Engine) GetHTTP() *modules.HTTPModule {
+	return e.http
+}
+
+// extractNamespace extracts the namespace from config_id
+// If config_id contains ":", takes the part before the first ":"
+// Otherwise, uses the entire config_id
+func extractNamespace(configID string) string {
+	if idx := findFirstColon(configID); idx != -1 {
+		return configID[:idx]
+	}
+	return configID
+}
+
+// findFirstColon finds the index of the first colon in a string
+func findFirstColon(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == ':' {
+			return i
+		}
+	}
+	return -1
 }

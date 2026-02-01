@@ -83,9 +83,25 @@ func main() {
 		}
 	}
 
-	// Initialize script engine (pass Redis client for KV module and crypto module)
+	// Initialize HTTP module with allowlist configuration
+	var httpModule *modules.HTTPModule
+	if cfg.Lua.Enabled {
+		httpModule = modules.NewHTTPModule(modules.HTTPConfig{
+			Timeout:             cfg.Lua.HTTPTimeout,
+			GlobalAllowlist:     cfg.Lua.AllowedHosts,
+			NamespaceAllowlists: cfg.Lua.AllowHostsByNamespace,
+			CacheEnabled:        cfg.Lua.HTTPCacheEnabled,
+			CacheTTL:            cfg.Lua.HTTPCacheTTL,
+		})
+		log.Info().
+			Bool("cache_enabled", cfg.Lua.HTTPCacheEnabled).
+			Dur("cache_ttl", cfg.Lua.HTTPCacheTTL).
+			Msg("HTTP module loaded")
+	}
+
+	// Initialize script engine (pass Redis client, crypto module, HTTP module, and logger)
 	scriptLoader := script.NewLoader()
-	scriptEngine := script.NewEngine(cfg.Lua, scriptLoader, cryptoModule, hs.Client())
+	scriptEngine := script.NewEngine(cfg.Lua, scriptLoader, cryptoModule, httpModule, hs.Client(), log.Logger)
 	defer scriptEngine.Close()
 
 	// Create worker

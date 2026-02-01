@@ -116,6 +116,12 @@ type LuaConfig struct {
 	CryptoKeys    map[string]string `mapstructure:"crypto_keys"` // key_name -> path to PEM file
 	HTTPTimeout   time.Duration     `mapstructure:"http_timeout"`
 	KVTTLDefault  time.Duration     `mapstructure:"kv_ttl_default"`
+	// Namespace-specific allowlists (key: namespace, value: comma-separated hosts)
+	// Env var format: HOWK_LUA_ALLOW_HOSTNAME_{NAMESPACE}=host1,host2
+	AllowHostsByNamespace map[string]string `mapstructure:"allow_hosts_by_namespace"`
+	// HTTP response cache settings
+	HTTPCacheEnabled bool          `mapstructure:"http_cache_enabled"`
+	HTTPCacheTTL     time.Duration `mapstructure:"http_cache_ttl"`
 }
 
 // DefaultConfig returns sensible defaults
@@ -187,13 +193,16 @@ func DefaultConfig() *Config {
 			IdempotencyTTL:  24 * time.Hour,
 		},
 		Lua: LuaConfig{
-			Enabled:       false, // Feature flag - must be explicitly enabled
-			Timeout:       500 * time.Millisecond,
-			MemoryLimitMB: 50,
-			AllowedHosts:  []string{"*"}, // Allow all by default
-			CryptoKeys:    map[string]string{},
-			HTTPTimeout:   5 * time.Second,
-			KVTTLDefault:  24 * time.Hour,
+			Enabled:               false, // Feature flag - must be explicitly enabled
+			Timeout:               500 * time.Millisecond,
+			MemoryLimitMB:         50,
+			AllowedHosts:          []string{"*"}, // Allow all by default
+			CryptoKeys:            map[string]string{},
+			HTTPTimeout:           5 * time.Second,
+			KVTTLDefault:          24 * time.Hour,
+			AllowHostsByNamespace: map[string]string{},
+			HTTPCacheEnabled:      true,
+			HTTPCacheTTL:          5 * time.Minute,
 		},
 	}
 }
@@ -322,6 +331,9 @@ func bindEnvVariables(v *viper.Viper) error {
 		"lua.crypto_keys",
 		"lua.http_timeout",
 		"lua.kv_ttl_default",
+		"lua.allow_hosts_by_namespace",
+		"lua.http_cache_enabled",
+		"lua.http_cache_ttl",
 	}
 
 	for _, key := range keys {

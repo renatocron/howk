@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog"
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
@@ -202,7 +203,7 @@ func (s *Server) handleTestScript(c *gin.Context) {
 		Enabled:       true,
 		Timeout:       500 * time.Millisecond,
 		MemoryLimitMB: 50,
-	}, tempLoader, nil, nil)
+	}, tempLoader, nil, nil, nil, zerolog.Logger{})
 	defer testEngine.Close()
 
 	// Execute script

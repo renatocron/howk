@@ -17,6 +17,7 @@ import (
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/worker"
+	"github.com/rs/zerolog"
 )
 
 // MockBroker implements broker.Broker
@@ -302,7 +303,7 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 
 	// Create a test script engine with disabled config (scripts won't execute)
 	testScriptLoader := script.NewLoader()
-	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil)
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})
 
 	w := worker.NewWorker(
 		cfg,
@@ -330,7 +331,7 @@ func TestNewWorker(t *testing.T) {
 
 	// Create a test script engine with disabled config
 	testScriptLoader := script.NewLoader()
-	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil)
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})
 
 	w := worker.NewWorker(
 		cfg,

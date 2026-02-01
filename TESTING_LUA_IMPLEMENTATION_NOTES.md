@@ -169,11 +169,94 @@ kv.del("session_token")
 - ✅ Redis key building with namespace
 - ✅ Namespace isolation between different config_ids
 
-### ⏸️ Phase 5: HTTP Module (GET with allowlist)
-- File: `internal/script/modules/http.go`
-- Singleflight deduplication
-- Hostname allowlist enforcement
-- Methods: http.get(url, headers)
+### ✅ Phase 5: HTTP Module (GET with allowlist) (COMPLETED)
+
+**Files Created:**
+- `internal/script/modules/http.go` - HTTP client with singleflight and caching
+- `internal/script/modules/http_test.go` - Comprehensive tests
+- `internal/script/modules/log.go` - Debug logging module
+
+**Implementation Details:**
+- **Security - Hostname Allowlist:**
+  - Global allowlist via `HOWK_LUA_ALLOWED_HOSTS` (comma-separated, supports wildcards like `*.example.com`)
+  - Namespace-specific allowlists via `HOWK_LUA_ALLOW_HOSTNAME_{NAMESPACE}` (e.g., `HOWK_LUA_ALLOW_HOSTNAME_MUSIC=api.music.com,auth.music.com`)
+  - Namespace is extracted from config_id (e.g., `music:10` → namespace `music`)
+  - Host validation happens before every request
+  
+- **Performance - Singleflight Deduplication:**
+  - Concurrent identical requests are automatically deduplicated
+  - Uses `golang.org/x/sync/singleflight` for request coalescing
+  - Only the first request hits the external server; others wait and share the result
+  
+- **Performance - Response Caching:**
+  - Optional response caching with configurable TTL per request
+  - Cache key includes URL, headers, and method for accurate invalidation
+  - Lua option: `http.get(url, headers, {cache_ttl = 300})` for 5-minute cache
+  
+- **Lua Method:**
+  - `http.get(url, headers_table, options_table)`
+  - Returns: `{status_code, body, headers}` table or `(nil, error)`
+
+**Lua Usage Example:**
+```lua
+local json = require("json")
+local http = require("http")
+
+-- Simple GET request
+local resp = http.get("https://api.example.com/users")
+if resp.status_code == 200 then
+    local users = json.decode(resp.body)
+    headers["X-User-Count"] = tostring(#users)
+end
+
+-- With custom headers and caching
+local resp, err = http.get(
+    "https://api.example.com/config",
+    {Authorization = "Bearer " .. token},
+    {cache_ttl = 300}  -- Cache for 5 minutes
+)
+if err then
+    log.error("Failed to fetch config", {error = err})
+    error(err)
+end
+
+-- Access response headers
+local contentType = resp.headers["Content-Type"]
+```
+
+**Environment Variable Setup:**
+```bash
+# Global allowlist (applies to all namespaces)
+export HOWK_LUA_ALLOWED_HOSTS="*.example.com,api.other.com,trusted.partner.net"
+
+# Namespace-specific allowlists (override global for that namespace)
+export HOWK_LUA_ALLOW_HOSTNAME_MUSIC="api.music.com,auth.music.com"
+export HOWK_LUA_ALLOW_HOSTNAME_PAYMENT="api.stripe.com,api.paypal.com"
+
+# HTTP module settings
+export HOWK_LUA_HTTP_TIMEOUT=5s
+export HOWK_LUA_HTTP_CACHE_ENABLED=true
+export HOWK_LUA_HTTP_CACHE_TTL=5m
+```
+
+**Debug Logging:**
+```lua
+-- Log debugging information
+log.info("Fetching user data", {user_id = userId, endpoint = apiEndpoint})
+log.debug("Token refresh started")
+log.warn("Rate limit approaching", {remaining = rateLimitRemaining})
+log.error("Request failed", {status = resp.status_code, body = resp.body})
+```
+
+**Tests:**
+- ✅ Hostname allowlist parsing
+- ✅ Exact host matching
+- ✅ Subdomain wildcard matching
+- ✅ Namespace-specific allowlists
+- ✅ Singleflight request deduplication
+- ✅ Response caching
+- ✅ Response structure (status, body, headers)
+- ✅ Host validation errors
 
 ### ✅ Phase 6: Crypto Module (RSA-OAEP + AES-GCM) (COMPLETED)
 
@@ -261,15 +344,17 @@ MIIEvQIBADANBgkqhkiG9w0BAQE...
 2. If HOWK_LUA_ENABLED=false but ScriptHash set → Send to DLQ (safety mechanism)
 3. Try to load script from Redis if not in worker's cache (lazy-load)
 4. Execute script transformation via engine.Execute()
-   - **NEW**: KV module loaded with webhook's config_id namespace
-   - **NEW**: Crypto module available for credential decryption
+   - KV module loaded with webhook's config_id namespace
+   - HTTP module loaded with namespace-specific allowlist
+   - Crypto module available for credential decryption
+   - Log module available for structured logging
 5. On error: Classify as retryable (Redis/HTTP failures) or non-retryable (syntax, timeout, etc.)
 6. Apply transformation to webhook
 7. Continue with HTTP delivery
 
 **Error Handling:**
 - **Non-retryable** → DLQ: ScriptDisabled, NotFound, Syntax, Runtime, Timeout, MemoryLimit, InvalidOutput
-- **Retryable** → Schedule retry: Redis unavailable (KV module errors), HTTP fetch failed (future HTTP module)
+- **Retryable** → Schedule retry: Redis unavailable (KV module errors), HTTP module failures (5xx, network errors)
 
 ### ✅ Phase 9: API Integration (PARTIALLY COMPLETED)
 
@@ -325,12 +410,6 @@ curl -X POST http://localhost:8080/config/test_config/script/test \
 
 ## Not Yet Implemented
 
-### ⏸️ Phase 5: HTTP Module (GET with allowlist)
-- File: `internal/script/modules/http.go`
-- Singleflight deduplication
-- Hostname allowlist enforcement
-- Methods: http.get(url, headers)
-
 ### ⏸️ Phase 8: Binary Data & Header Control
 - Support binary request.body
 - Implement config.opt_out_default_headers
@@ -348,8 +427,7 @@ curl -X POST http://localhost:8080/config/test_config/script/test \
 1. **Script Hot Reload**: Worker doesn't subscribe to `howk.scripts` topic, so script updates require worker restart or cache miss to load from Redis
 2. **API Script Cache**: API doesn't maintain in-memory script cache, queries Redis on every enqueue
 3. **Script Metrics**: No Prometheus metrics yet for script execution
-4. **Script Debugging**: No structured logging within Lua scripts
-5. **Memory Limits**: Configured but not enforced at VM level (Lua limitation)
+4. **Memory Limits**: Configured but not enforced at VM level (Lua limitation)
 
 ## Configuration
 
@@ -362,9 +440,12 @@ HOWK_LUA_ENABLED=true              # Must be explicitly enabled
 HOWK_LUA_TIMEOUT=500ms             # CPU timeout per execution
 HOWK_LUA_MEMORY_LIMIT_MB=50        # Memory limit (not enforced yet)
 
-# HTTP module (Phase 5 - not yet implemented)
-HOWK_LUA_ALLOWED_HOSTS=*           # HTTP allowlist
-HOWK_LUA_HTTP_TIMEOUT=5s           # HTTP module timeout
+# HTTP module (Phase 5)
+HOWK_LUA_ALLOWED_HOSTS=*                # Global HTTP allowlist (comma-separated, supports wildcards like *.example.com)
+HOWK_LUA_ALLOW_HOSTNAME_MUSIC="api.music.com,auth.music.com"  # Namespace-specific allowlist
+HOWK_LUA_HTTP_TIMEOUT=5s                # HTTP request timeout
+HOWK_LUA_HTTP_CACHE_ENABLED=true        # Enable response caching
+HOWK_LUA_HTTP_CACHE_TTL=5m              # Default cache TTL
 
 # KV module (Phase 4)
 HOWK_LUA_KV_TTL_DEFAULT=24h        # KV default TTL (fallback if not specified in set())
@@ -415,13 +496,15 @@ howk.scripts:
 - ✅ Timeout: 500ms CPU limit enforced
 - ✅ Feature flag: HOWK_LUA_ENABLED must be explicitly set
 - ✅ DLQ safety: Scripts disabled + ScriptHash set = DLQ to prevent data leaks
-- ✅ **NEW**: KV namespace isolation: Each config_id gets its own Redis key prefix
-- ✅ **NEW**: Crypto keys loaded from environment (not accessible to Lua scripts directly)
-- ✅ **NEW**: Private key validation at boot time (fail fast)
+- ✅ KV namespace isolation: Each config_id gets its own Redis key prefix
+- ✅ Crypto keys loaded from environment (not accessible to Lua scripts directly)
+- ✅ Private key validation at boot time (fail fast)
+- ✅ **NEW**: HTTP hostname allowlist (global and namespace-specific)
+- ✅ **NEW**: Singleflight request deduplication prevents request amplification
+- ✅ **NEW**: Structured logging for script debugging
 
 **Not Yet Implemented:**
 - ⏸️ Memory limits (Lua VM doesn't support runtime limits)
-- ⏸️ Network allowlist (HTTP module not implemented)
 - ⏸️ Script execution metrics/audit logging
 
 ## Example Scripts
@@ -485,54 +568,146 @@ headers["Authorization"] = "Bearer " .. creds.access_token
 headers["X-Org-ID"] = tostring(creds.org_id)
 ```
 
-### Combined Example - Full Token Flow
+### HTTP Module - Fetch and Cache Token
 ```lua
 local json = require("json")
+local http = require("http")
 
--- Step 1: Check for cached session
-local session = kv.get("session:" .. metadata.config_id)
+-- Try to get cached token
+local token = kv.get("api_token")
 
-if not session then
-    -- Step 2: Decrypt credentials from incoming webhook
-    local creds_json, err = crypto.decrypt_credential(
-        "PRIMARY",
-        headers["X-Encrypted-Key"],
-        headers["X-Encrypted-Data"]
+if not token then
+    log.info("Token not cached, fetching from auth service")
+    
+    -- Fetch token from auth service
+    local resp, err = http.get(
+        "https://auth.example.com/token",
+        {Authorization = "Basic " .. credentials},
+        {cache_ttl = 60}  -- Cache this request too
     )
+    
     if err then
-        error("Failed to decrypt credentials: " .. err)
+        log.error("Failed to fetch token", {error = err})
+        error("Token fetch failed: " .. err)
     end
     
-    local creds = json.decode(creds_json)
+    if resp.status_code ~= 200 then
+        log.error("Auth service returned error", {status = resp.status_code})
+        error("Auth failed with status " .. resp.status_code)
+    end
     
-    -- Step 3: Store session (cache for 30 minutes)
-    session = json.encode({
-        token = creds.token,
-        expires_at = creds.expires_at
-    })
-    kv.set("session:" .. metadata.config_id, session, 1800)
+    local data = json.decode(resp.body)
+    token = data.access_token
+    
+    -- Cache the token (expire 1 minute before actual expiry)
+    local ttl = data.expires_in - 60
+    kv.set("api_token", token, ttl)
+    
+    log.info("Token fetched and cached", {ttl = ttl})
+else
+    log.debug("Using cached token")
 end
 
--- Step 4: Apply token to outgoing request
-local session_data = json.decode(session)
-headers["Authorization"] = "Bearer " .. session_data.token
-headers["X-Session-Cached"] = "true"
+headers["Authorization"] = "Bearer " .. token
+```
+
+### Combined Example - Full OAuth Flow with HTTP
+```lua
+local json = require("json")
+local http = require("http")
+
+log.info("Starting OAuth flow", {attempt = metadata.attempt})
+
+-- Step 1: Check for cached access token
+local access_token = kv.get("oauth:access_token")
+
+if not access_token then
+    log.info("Access token not cached, checking for refresh token")
+    
+    -- Step 2: Try to use refresh token
+    local refresh_token = kv.get("oauth:refresh_token")
+    
+    if not refresh_token then
+        log.info("No refresh token, fetching initial credentials")
+        
+        -- Step 3: Decrypt stored credentials
+        local decrypted, err = crypto.decrypt_credential(
+            "OAUTH_KEY",
+            headers["X-Encrypted-Key"],
+            headers["X-Encrypted-Data"]
+        )
+        if err then
+            log.error("Failed to decrypt credentials", {error = err})
+            error("Decryption failed: " .. err)
+        end
+        
+        local creds = json.decode(decrypted)
+        
+        -- Step 4: Exchange credentials for tokens
+        local resp, err = http.get(
+            "https://auth.example.com/oauth/token?grant_type=client_credentials",
+            {
+                Authorization = "Basic " .. creds.client_credentials,
+                ["Content-Type"] = "application/json"
+            }
+        )
+        
+        if err then
+            log.error("Token request failed", {error = err})
+            error("Token request failed: " .. err)
+        end
+        
+        local token_data = json.decode(resp.body)
+        access_token = token_data.access_token
+        refresh_token = token_data.refresh_token
+        
+        -- Cache both tokens
+        kv.set("oauth:access_token", access_token, token_data.expires_in - 60)
+        kv.set("oauth:refresh_token", refresh_token, 86400) -- 24 hours
+        
+        log.info("OAuth tokens obtained and cached")
+    else
+        log.info("Using refresh token to get new access token")
+        
+        -- Step 5: Use refresh token
+        local resp, err = http.get(
+            "https://auth.example.com/oauth/refresh?token=" .. refresh_token
+        )
+        
+        if err or resp.status_code ~= 200 then
+            log.error("Token refresh failed", {error = err, status = resp.status_code})
+            -- Clear invalid refresh token
+            kv.del("oauth:refresh_token")
+            error("Token refresh failed")
+        end
+        
+        local token_data = json.decode(resp.body)
+        access_token = token_data.access_token
+        kv.set("oauth:access_token", access_token, token_data.expires_in - 60)
+        
+        log.info("Access token refreshed")
+    end
+end
+
+-- Step 6: Apply token to outgoing request
+headers["Authorization"] = "Bearer " .. access_token
+headers["X-Token-Source"] = "oauth"
+
+log.info("OAuth flow complete", {has_token = true})
 ```
 
 ## Next Steps
 
 **Priority 1 (Core Features):**
-1. ⏸️ Implement Phase 5: HTTP module for payload enrichment
-2. ⏸️ Add script hot reload (Kafka subscription in worker/API)
+1. ⏸️ Add script hot reload (Kafka subscription in worker/API)
 
 **Priority 2 (Production Readiness):**
-3. Add Prometheus metrics for script execution
-4. Implement Phase 10: Integration tests and documentation
-5. Add structured logging for script execution steps
+2. Add Prometheus metrics for script execution
+3. Implement Phase 10: Integration tests and documentation
 
 **Priority 3 (Advanced Features):**
-6. ⏸️ Implement Phase 8: Binary data support
-7. Performance optimization and benchmarking
+4. ⏸️ Implement Phase 8: Binary data support
+5. Performance optimization and benchmarking
 
 ## Files Added/Modified Summary
 
@@ -545,10 +720,13 @@ headers["X-Session-Cached"] = "true"
 - `internal/script/engine_test.go`
 - `internal/script/modules/base64.go`
 - `internal/script/modules/base64_test.go`
-- `internal/script/modules/kv.go` ⭐ NEW
-- `internal/script/modules/kv_test.go` ⭐ NEW
-- `internal/script/modules/crypto.go` ⭐ NEW
-- `internal/script/modules/crypto_test.go` ⭐ NEW
+- `internal/script/modules/kv.go`
+- `internal/script/modules/kv_test.go`
+- `internal/script/modules/crypto.go`
+- `internal/script/modules/crypto_test.go`
+- `internal/script/modules/http.go` ⭐ NEW
+- `internal/script/modules/http_test.go` ⭐ NEW
+- `internal/script/modules/log.go` ⭐ NEW
 - `internal/api/h_script.go`
 - `TESTING_IMPLEMENTATION_NOTES.md` (this file)
 - `TESTING_SUMMARY.md`
@@ -565,7 +743,7 @@ headers["X-Session-Cached"] = "true"
 - `internal/api/server.go`
 - `internal/api/h_script.go`
 - `cmd/api/main.go`
-- `cmd/worker/main.go` ⭐ MODIFIED (crypto initialization)
+- `cmd/worker/main.go` ⭐ MODIFIED (crypto & HTTP initialization)
 - `docker-compose.yml`
 - `.env.example`
 - `config.example.yaml`
@@ -599,6 +777,22 @@ headers["X-Session-Cached"] = "true"
 - ✅ Updated Engine to support KV and Crypto modules
 - ✅ Updated worker main.go to initialize crypto module
 - ✅ All tests passing (Script: 8, KV: 3, Crypto: 13)
+
+**2026-02-01 (Phase 5 - HTTP Module and Logging):**
+- ✅ Phase 5: HTTP Module complete
+  - http.get() with hostname allowlist enforcement
+  - Global allowlist via HOWK_LUA_ALLOWED_HOSTS
+  - Namespace-specific allowlists via HOWK_LUA_ALLOW_HOSTNAME_{NAMESPACE}
+  - Singleflight request deduplication
+  - Optional response caching with per-request TTL
+  - Response format: {status_code, body, headers}
+- ✅ Debug Logging Module complete
+  - log.info(), log.debug(), log.warn(), log.error()
+  - Structured logging with custom fields
+  - Webhook ID automatically included in all log entries
+- ✅ Updated Engine to load HTTP and Log modules per-execution
+- ✅ Updated worker main.go to initialize HTTP module
+- ✅ All tests passing (HTTP: 7, Total: 31)
 
 ---
 *Last Updated: 2026-02-01 07:30 PM*
