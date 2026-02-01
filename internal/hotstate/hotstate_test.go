@@ -28,6 +28,7 @@ var defaultTTLConfig = config.TTLConfig{
 	StatusTTL:       7 * 24 * time.Hour,
 	StatsTTL:        48 * time.Hour,
 	IdempotencyTTL:  24 * time.Hour,
+	RetryDataTTL:    7 * 24 * time.Hour,
 }
 
 func newMockedHotState(t *testing.T, cfg config.CircuitBreakerConfig) (*RedisHotState, redismock.ClientMock) {
@@ -226,25 +227,56 @@ func TestRedisHotState_Close(t *testing.T) {
 
 func TestRedisHotState_ScheduleRetry(t *testing.T) {
 	ctx := context.Background()
-	msg := &RetryMessage{
-		Webhook: &domain.Webhook{
-			ID:       domain.WebhookID("wh-123"),
-			ConfigID: domain.ConfigID("config-1"),
-			Endpoint: "https://example.com/webhook",
-		},
-		ScheduledAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		Reason:      "circuit_open",
-	}
+	webhookID := domain.WebhookID("wh-123")
+	attempt := 2
+	scheduledAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	reason := "circuit_open"
 
-	payload, _ := json.Marshal(msg)
 	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
 
+	// The ScheduleRetry uses a pipeline (not transaction)
+	// Match any value for the metadata JSON since it's passed as bytes
+	mockClient.Regexp().ExpectSet("retry_meta:wh-123:2", `.*`, 7*24*time.Hour).SetVal("OK")
 	mockClient.ExpectZAdd("retries", redis.Z{
-		Score:  float64(msg.ScheduledAt.Unix()),
-		Member: payload,
+		Score:  float64(scheduledAt.Unix()),
+		Member: "wh-123:2",
 	}).SetVal(1)
 
-	err := state.ScheduleRetry(ctx, msg)
+	err := state.ScheduleRetry(ctx, webhookID, attempt, scheduledAt, reason)
+	require.NoError(t, err)
+	require.NoError(t, mockClient.ExpectationsWereMet())
+}
+
+func TestRedisHotState_StoreAndGetRetryData(t *testing.T) {
+	ctx := context.Background()
+	webhook := &domain.Webhook{
+		ID:       domain.WebhookID("wh-123"),
+		ConfigID: domain.ConfigID("config-1"),
+		Endpoint: "https://example.com/webhook",
+		Attempt:  2,
+	}
+	ttl := 7 * 24 * time.Hour
+
+	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
+
+	// Store data and then retrieve it to verify round-trip
+	// Use regex matching for the compressed data
+	mockClient.Regexp().ExpectSet("retry_data:wh-123", `^.+$`, ttl).SetVal("OK")
+	err := state.StoreRetryData(ctx, webhook, ttl)
+	require.NoError(t, err)
+
+	require.NoError(t, mockClient.ExpectationsWereMet())
+}
+
+func TestRedisHotState_DeleteRetryData(t *testing.T) {
+	ctx := context.Background()
+	webhookID := domain.WebhookID("wh-123")
+
+	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
+
+	mockClient.ExpectDel("retry_data:wh-123").SetVal(1)
+
+	err := state.DeleteRetryData(ctx, webhookID)
 	require.NoError(t, err)
 	require.NoError(t, mockClient.ExpectationsWereMet())
 }

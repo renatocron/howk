@@ -16,11 +16,11 @@ import (
 // Reconciler rebuilds Redis state from Kafka topics
 type Reconciler struct {
 	config   config.KafkaConfig
-	hotstate *hotstate.RedisHotState
+	hotstate hotstate.HotState
 }
 
 // NewReconciler creates a new reconciler
-func NewReconciler(cfg config.KafkaConfig, hs *hotstate.RedisHotState) *Reconciler {
+func NewReconciler(cfg config.KafkaConfig, hs hotstate.HotState) *Reconciler {
 	return &Reconciler{
 		config:   cfg,
 		hotstate: hs,
@@ -203,11 +203,11 @@ func (r *Reconciler) scheduleRetry(ctx context.Context, result *domain.DeliveryR
 		result.Webhook.ScheduledAt = result.NextRetryAt
 	}
 
-	retryMsg := &hotstate.RetryMessage{
-		Webhook:     result.Webhook,
-		ScheduledAt: result.Webhook.ScheduledAt,
-		Reason:      "reconciled",
+	// NEW: Use StoreRetryData first (with per-reference key)
+	if err := r.hotstate.StoreRetryData(ctx, result.Webhook, 7*24*time.Hour); err != nil {
+		return err
 	}
 
-	return r.hotstate.ScheduleRetry(ctx, retryMsg)
+	// NEW: Use updated ScheduleRetry with separate reference scheduling
+	return r.hotstate.ScheduleRetry(ctx, result.Webhook.ID, result.Webhook.Attempt, result.Webhook.ScheduledAt, "reconciled")
 }

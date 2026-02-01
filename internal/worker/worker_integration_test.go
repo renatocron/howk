@@ -166,13 +166,13 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 	// Wait for retry to be scheduled
 	time.Sleep(500 * time.Millisecond)
 
-	// Check that there's a retry in the queue
-	retries, err := hs.PopDueRetries(ctx, 10)
+	// Check that there's a retry scheduled (look at ZSET directly)
+	count, err := hs.Client().ZCount(ctx, "retries", "-inf", "+inf").Result()
 	require.NoError(t, err)
 
 	// The retry might not be due yet (depends on retry delay)
-	// So we accept either 0 or 1 retry at this moment
-	t.Logf("Retries found: %d", len(retries))
+	// So we accept either 0 or 1 scheduled retry at this moment
+	t.Logf("Retries scheduled: %d", count)
 }
 
 func TestWorker_CircuitOpens(t *testing.T) {

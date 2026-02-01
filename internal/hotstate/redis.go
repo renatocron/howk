@@ -15,12 +15,14 @@ import (
 
 const (
 	statusPrefix       = "status:"
-	retryQueue         = "retries"
+	retryQueue         = "retries"     // ZSET - stores references like "webhook_id:attempt"
+	retryDataPrefix    = "retry_data:" // String (Compressed JSON) - stores per-reference data
+	retryMetaPrefix    = "retry_meta:" // String (JSON) - stores lightweight metadata
 	processedPrefix    = "processed:"
 	statsPrefix        = "stats:"
 	hllPrefix          = "hll:"
-	circuitStatePrefix = "circuit:" // Local constant for circuit breaker keys
-	scriptPrefix       = "script:"  // Script cache keys
+	circuitStatePrefix = "circuit:"
+	scriptPrefix       = "script:"
 )
 
 // RedisHotState implements HotState using Redis
@@ -75,7 +77,7 @@ func (r *RedisHotState) GetCircuit(ctx context.Context, endpointHash domain.Endp
 			EndpointHash:   endpointHash,
 			State:          domain.CircuitClosed,
 			Failures:       0,
-			StateChangedAt: time.Now(), // Use current time as initial state change
+			StateChangedAt: time.Now(),
 		}, nil
 	}
 	if err != nil {
@@ -96,7 +98,6 @@ func (r *RedisHotState) UpdateCircuit(ctx context.Context, cb *domain.CircuitBre
 		return fmt.Errorf("marshal circuit: %w", err)
 	}
 
-	// Calculate TTL for circuit state
 	ttl := r.ttlConfig.CircuitStateTTL
 	if cb.State == domain.CircuitClosed && cb.Failures == 0 {
 		ttl = 2 * r.circuitConfig.RecoveryTimeout
@@ -113,7 +114,7 @@ func (r *RedisHotState) RecordSuccess(ctx context.Context, endpointHash domain.E
 
 	err := r.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		var err error
-		cb, err = r.GetCircuit(ctx, endpointHash) // Use HotState's GetCircuit
+		cb, err = r.GetCircuit(ctx, endpointHash)
 		if err != nil {
 			return err
 		}
@@ -122,28 +123,23 @@ func (r *RedisHotState) RecordSuccess(ctx context.Context, endpointHash domain.E
 
 		switch cb.State {
 		case domain.CircuitClosed:
-			// Reset failure count on success
 			cb.Failures = 0
-
 		case domain.CircuitHalfOpen:
 			cb.Successes++
 			if cb.Successes >= r.circuitConfig.SuccessThreshold {
-				// Transition to closed
 				cb.State = domain.CircuitClosed
 				cb.StateChangedAt = now
 				cb.Failures = 0
 				cb.Successes = 0
 				cb.NextProbeAt = nil
 			}
-
 		case domain.CircuitOpen:
-			// Shouldn't happen, but handle gracefully
 			cb.State = domain.CircuitHalfOpen
 			cb.StateChangedAt = now
 			cb.Successes = 1
 		}
 
-		return r.UpdateCircuit(ctx, cb) // Use HotState's UpdateCircuit
+		return r.UpdateCircuit(ctx, cb)
 	}, key)
 
 	if err != nil {
@@ -161,7 +157,7 @@ func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.E
 
 	err := r.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		var err error
-		cb, err = r.GetCircuit(ctx, endpointHash) // Use HotState's GetCircuit
+		cb, err = r.GetCircuit(ctx, endpointHash)
 		if err != nil {
 			return err
 		}
@@ -169,12 +165,10 @@ func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.E
 		lastFailureAt := cb.LastFailureAt
 		cb.LastFailureAt = &now
 
-		// Only count failures within the failure window
 		windowStart := now.Add(-r.circuitConfig.FailureWindow)
 		if lastFailureAt != nil && lastFailureAt.After(windowStart) {
 			cb.Failures++
 		} else {
-			// Reset failures if outside window or first failure
 			cb.Failures = 1
 		}
 
@@ -185,16 +179,15 @@ func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.E
 				cb.StateChangedAt = now
 			}
 		case domain.CircuitHalfOpen:
-			// Any failure in half-open goes back to open
 			cb.State = domain.CircuitOpen
 			cb.StateChangedAt = now
 			cb.Successes = 0
 			cb.NextProbeAt = nil
 		case domain.CircuitOpen:
-			// Already open, just update failure time
+			// Already open
 		}
 
-		return r.UpdateCircuit(ctx, cb) // Use HotState's UpdateCircuit
+		return r.UpdateCircuit(ctx, cb)
 	}, key)
 
 	if err != nil {
@@ -202,6 +195,111 @@ func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.E
 	}
 
 	return cb, nil
+}
+
+// --- Retry Scheduling (New Implementation with Visibility Timeout) ---
+
+// StoreRetryData stores the compressed webhook data (one per webhook)
+// The TTL is refreshed on each call, keeping data alive for active retries
+func (r *RedisHotState) StoreRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error {
+	compressed, err := compressWebhook(webhook)
+	if err != nil {
+		return err
+	}
+
+	// One key per webhook: "retry_data:webhook_id"
+	key := retryDataPrefix + string(webhook.ID)
+	return r.rdb.Set(ctx, key, compressed, ttl).Err()
+}
+
+// ScheduleRetry schedules the reference in ZSET
+func (r *RedisHotState) ScheduleRetry(ctx context.Context, webhookID domain.WebhookID, attempt int, scheduledAt time.Time, reason string) error {
+	reference := fmt.Sprintf("%s:%d", webhookID, attempt)
+	score := float64(scheduledAt.Unix())
+
+	// Store metadata (lightweight)
+	metaKey := retryMetaPrefix + reference
+	meta := map[string]interface{}{
+		"reason":       reason,
+		"scheduled_at": scheduledAt.Format(time.RFC3339),
+	}
+	metaJSON, _ := json.Marshal(meta)
+
+	pipe := r.rdb.Pipeline()
+	// Metadata has same TTL as data fallback
+	pipe.Set(ctx, metaKey, metaJSON, r.ttlConfig.RetryDataTTL)
+	pipe.ZAdd(ctx, retryQueue, redis.Z{
+		Score:  score,
+		Member: reference,
+	})
+
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// PopAndLockRetries atomically pops due retries and pushes their score to the future (visibility timeout)
+// Returns list of references (webhook_id:attempt)
+func (r *RedisHotState) PopAndLockRetries(ctx context.Context, limit int, lockDuration time.Duration) ([]string, error) {
+	now := float64(time.Now().Unix())
+	newScore := float64(time.Now().Add(lockDuration).Unix())
+
+	// Lua script: Find due items, update their score to future (lock), return them
+	script := redis.NewScript(`
+		local items = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
+		if #items > 0 then
+			for i, member in ipairs(items) do
+				redis.call('ZADD', KEYS[1], ARGV[3], member)
+			end
+		end
+		return items
+	`)
+
+	result, err := script.Run(ctx, r.rdb, []string{retryQueue}, now, limit, newScore).StringSlice()
+	if err != nil {
+		return nil, fmt.Errorf("pop and lock retries: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetRetryData retrieves and decompresses webhook data by webhookID
+func (r *RedisHotState) GetRetryData(ctx context.Context, webhookID domain.WebhookID) (*domain.Webhook, error) {
+	key := retryDataPrefix + string(webhookID)
+	data, err := r.rdb.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, fmt.Errorf("retry data not found for %s", webhookID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get retry data: %w", err)
+	}
+
+	// Decompress
+	return decompressWebhook(data)
+}
+
+// AckRetry confirms processing and deletes reference from ZSET + metadata
+// NOTE: Does NOT delete data - data is deleted only on terminal state by DeleteRetryData
+func (r *RedisHotState) AckRetry(ctx context.Context, reference string) error {
+	pipe := r.rdb.Pipeline()
+
+	// 1. Remove from ZSET (the lock/schedule)
+	pipe.ZRem(ctx, retryQueue, reference)
+
+	// 2. Remove Metadata
+	pipe.Del(ctx, retryMetaPrefix+reference)
+
+	// NOTE: We do NOT delete data here - it's shared across attempts
+	// and deleted only on terminal state (success or DLQ)
+
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// DeleteRetryData deletes the compressed webhook data
+// Call this on terminal states (success or DLQ/exhaustion)
+func (r *RedisHotState) DeleteRetryData(ctx context.Context, webhookID domain.WebhookID) error {
+	key := retryDataPrefix + string(webhookID)
+	return r.rdb.Del(ctx, key).Err()
 }
 
 // --- Status Operations ---
@@ -222,7 +320,7 @@ func (r *RedisHotState) GetStatus(ctx context.Context, webhookID domain.WebhookI
 
 	data, err := r.rdb.Get(ctx, key).Bytes()
 	if err == redis.Nil {
-		return nil, nil // Not found
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get status: %w", err)
@@ -234,53 +332,6 @@ func (r *RedisHotState) GetStatus(ctx context.Context, webhookID domain.WebhookI
 	}
 
 	return &status, nil
-}
-
-// --- Retry Scheduling ---
-
-func (r *RedisHotState) ScheduleRetry(ctx context.Context, msg *RetryMessage) error {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("marshal retry message: %w", err)
-	}
-
-	// ZADD with score = scheduled timestamp (unix)
-	score := float64(msg.ScheduledAt.Unix())
-	return r.rdb.ZAdd(ctx, retryQueue, redis.Z{
-		Score:  score,
-		Member: data,
-	}).Err()
-}
-
-func (r *RedisHotState) PopDueRetries(ctx context.Context, limit int) ([]*RetryMessage, error) {
-	now := float64(time.Now().Unix())
-
-	// ZPOPMIN atomically pops the lowest scored items
-	// We use a Lua script to pop only items with score <= now
-	script := redis.NewScript(`
-		local results = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
-		if #results > 0 then
-			redis.call('ZREM', KEYS[1], unpack(results))
-		end
-		return results
-	`)
-
-	results, err := script.Run(ctx, r.rdb, []string{retryQueue}, now, limit).StringSlice()
-	if err != nil {
-		return nil, fmt.Errorf("pop due retries: %w", err)
-	}
-
-	messages := make([]*RetryMessage, 0, len(results))
-	for _, data := range results {
-		var msg RetryMessage
-		if err := json.Unmarshal([]byte(data), &msg); err != nil {
-			// Log and skip malformed messages
-			continue
-		}
-		messages = append(messages, &msg)
-	}
-
-	return messages, nil
 }
 
 // --- Stats Operations ---
@@ -347,8 +398,7 @@ func (r *RedisHotState) GetStats(ctx context.Context, from, to time.Time) (*doma
 	pipe.Exec(ctx)
 
 	// Aggregate results
-	for _, bucket :=
-	range buckets {
+	for _, bucket := range buckets {
 		if val, err := cmds["enqueued:"+bucket].Int64(); err == nil {
 			stats.Enqueued += val
 		}
@@ -385,47 +435,6 @@ func (r *RedisHotState) CheckAndSetProcessed(ctx context.Context, webhookID doma
 	return set, nil
 }
 
-// --- Admin Operations ---
-
-func (r *RedisHotState) Ping(ctx context.Context) error {
-	return r.rdb.Ping(ctx).Err()
-}
-
-func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
-	// Only flush our keys, not the entire database
-	// This is a pattern scan + delete
-	patterns := []string{
-		statusPrefix + "*",
-		retryQueue,
-		processedPrefix + "*",
-		statsPrefix + "*",
-		hllPrefix + "*",
-		circuitStatePrefix + "*", // Include circuit state keys
-	}
-
-	for _, pattern := range patterns {
-		if pattern == retryQueue {
-			r.rdb.Del(ctx, retryQueue)
-			continue
-		}
-
-		iter := r.rdb.Scan(ctx, 0, pattern, 1000).Iterator()
-		var keys []string
-		for iter.Next(ctx) {
-			keys = append(keys, iter.Val())
-			if len(keys) >= 1000 {
-				r.rdb.Del(ctx, keys...)
-				keys = keys[:0]
-			}
-		}
-		if len(keys) > 0 {
-			r.rdb.Del(ctx, keys...)
-		}
-	}
-
-	return nil
-}
-
 // --- Script Operations ---
 
 // GetScript retrieves a script configuration from Redis cache
@@ -458,6 +467,48 @@ func (r *RedisHotState) DeleteScript(ctx context.Context, configID domain.Config
 	if err := r.rdb.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("delete script: %w", err)
 	}
+	return nil
+}
+
+// --- Admin Operations ---
+
+func (r *RedisHotState) Ping(ctx context.Context) error {
+	return r.rdb.Ping(ctx).Err()
+}
+
+func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
+	// Only flush our keys, not the entire database
+	patterns := []string{
+		statusPrefix + "*",
+		retryQueue,
+		retryDataPrefix + "*",
+		retryMetaPrefix + "*",
+		processedPrefix + "*",
+		statsPrefix + "*",
+		hllPrefix + "*",
+		circuitStatePrefix + "*",
+	}
+
+	for _, pattern := range patterns {
+		if pattern == retryQueue {
+			r.rdb.Del(ctx, retryQueue)
+			continue
+		}
+
+		iter := r.rdb.Scan(ctx, 0, pattern, 1000).Iterator()
+		var keys []string
+		for iter.Next(ctx) {
+			keys = append(keys, iter.Val())
+			if len(keys) >= 1000 {
+				r.rdb.Del(ctx, keys...)
+				keys = keys[:0]
+			}
+		}
+		if len(keys) > 0 {
+			r.rdb.Del(ctx, keys...)
+		}
+	}
+
 	return nil
 }
 

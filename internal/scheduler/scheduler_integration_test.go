@@ -43,7 +43,7 @@ func setupSchedulerTest(t *testing.T) (*scheduler.Scheduler, *hotstate.RedisHotS
 	return s, hs, b, ctx, cancel
 }
 
-func TestScheduler_PopDueRetries(t *testing.T) {
+func TestScheduler_PopAndLockRetries(t *testing.T) {
 	s, hs, b, ctx, cancel := setupSchedulerTest(t)
 	defer cancel()
 
@@ -75,13 +75,12 @@ func TestScheduler_PopDueRetries(t *testing.T) {
 
 	// Schedule retry that is due now
 	webhook := testutil.NewTestWebhook("https://example.com/webhook")
-	retryMsg := &hotstate.RetryMessage{
-		Webhook:     webhook,
-		ScheduledAt: time.Now().Add(-1 * time.Second), // Already due
-		Reason:      "test",
-	}
+	webhook.Attempt = 1
 
-	err := hs.ScheduleRetry(ctx, retryMsg)
+	// Store data and schedule retry
+	err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+	require.NoError(t, err)
+	err = hs.ScheduleRetry(ctx, webhook.ID, webhook.Attempt, time.Now().Add(-1*time.Second), "test")
 	require.NoError(t, err)
 
 	// Run scheduler once
@@ -140,13 +139,9 @@ func TestScheduler_NotDueYet(t *testing.T) {
 
 	// Schedule retry for future
 	webhook := testutil.NewTestWebhook("https://example.com/webhook")
-	retryMsg := &hotstate.RetryMessage{
-		Webhook:     webhook,
-		ScheduledAt: time.Now().Add(10 * time.Hour), // Far in the future
-		Reason:      "test future",
-	}
-
-	err := hs.ScheduleRetry(ctx, retryMsg)
+	err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+	require.NoError(t, err)
+	err = hs.ScheduleRetry(ctx, webhook.ID, 1, time.Now().Add(10*time.Hour), "test future")
 	require.NoError(t, err)
 
 	// Run scheduler once
@@ -168,10 +163,13 @@ func TestScheduler_NotDueYet(t *testing.T) {
 		// Expected - webhook not published
 	}
 
-	// Verify webhook is still in retry queue
-	retries, err := hs.PopDueRetries(ctx, 10)
+	// Verify webhook is still in retry queue (locked in future)
+	refs, err := hs.PopAndLockRetries(ctx, 10, 30*time.Second)
 	require.NoError(t, err)
-	assert.Empty(t, retries, "webhook should not be due yet")
+	assert.Empty(t, refs, "webhook should not be due yet")
+
+	// Cleanup
+	hs.DeleteRetryData(ctx, webhook.ID)
 }
 
 func TestScheduler_ReEnqueueToKafka(t *testing.T) {
@@ -211,13 +209,9 @@ func TestScheduler_ReEnqueueToKafka(t *testing.T) {
 		webhook := testutil.NewTestWebhook("https://example.com/webhook")
 		webhooks[i] = webhook
 
-		retryMsg := &hotstate.RetryMessage{
-			Webhook:     webhook,
-			ScheduledAt: time.Now().Add(-1 * time.Second),
-			Reason:      "test batch",
-		}
-
-		err := hs.ScheduleRetry(ctx, retryMsg)
+		err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+		require.NoError(t, err)
+		err = hs.ScheduleRetry(ctx, webhook.ID, i+1, time.Now().Add(-1*time.Second), "test batch")
 		require.NoError(t, err)
 	}
 
@@ -244,10 +238,15 @@ func TestScheduler_ReEnqueueToKafka(t *testing.T) {
 
 	assert.Equal(t, 3, receivedCount, "all 3 webhooks should be re-enqueued")
 
-	// Verify retry queue is empty
-	retries, err := hs.PopDueRetries(ctx, 10)
+	// Verify retry queue is empty (all acked)
+	refs, err := hs.PopAndLockRetries(ctx, 10, 30*time.Second)
 	require.NoError(t, err)
-	assert.Empty(t, retries, "all retries should have been popped")
+	assert.Empty(t, refs, "all retries should have been acked")
+
+	// Cleanup data
+	for _, wh := range webhooks {
+		hs.DeleteRetryData(ctx, wh.ID)
+	}
 }
 
 func TestScheduler_BatchSizeLimit(t *testing.T) {
@@ -283,16 +282,14 @@ func TestScheduler_BatchSizeLimit(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Schedule 10 retries (more than batch size)
+	webhooks := make([]*domain.Webhook, 10)
 	for i := 0; i < 10; i++ {
 		webhook := testutil.NewTestWebhook("https://example.com/webhook")
+		webhooks[i] = webhook
 
-		retryMsg := &hotstate.RetryMessage{
-			Webhook:     webhook,
-			ScheduledAt: time.Now().Add(-1 * time.Second),
-			Reason:      "test batch limit",
-		}
-
-		err := hs.ScheduleRetry(ctx, retryMsg)
+		err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+		require.NoError(t, err)
+		err = hs.ScheduleRetry(ctx, webhook.ID, i+1, time.Now().Add(-1*time.Second), "test batch limit")
 		require.NoError(t, err)
 	}
 
@@ -319,4 +316,9 @@ func TestScheduler_BatchSizeLimit(t *testing.T) {
 	}
 
 	assert.Equal(t, 10, receivedCount, "all 10 webhooks should eventually be re-enqueued")
+
+	// Cleanup data
+	for _, wh := range webhooks {
+		hs.DeleteRetryData(ctx, wh.ID)
+	}
 }

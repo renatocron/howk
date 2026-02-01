@@ -185,6 +185,9 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 		// Record stats
 		w.recordStats(ctx, "delivered", &webhook)
 
+		// Cleanup retry data on success (terminal state)
+		w.cleanupRetryData(ctx, &webhook)
+
 		return nil
 	}
 
@@ -217,13 +220,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 		webhook.Attempt++
 		webhook.ScheduledAt = nextRetryAt
 
-		retryMsg := &hotstate.RetryMessage{
-			Webhook:     &webhook,
-			ScheduledAt: nextRetryAt,
-			Reason:      fmt.Sprintf("status=%d, error=%s", result.StatusCode, deliveryResult.Error),
-		}
-
-		if err := w.hotstate.ScheduleRetry(ctx, retryMsg); err != nil {
+		if err := w.scheduleRetry(ctx, &webhook, nextRetryAt, fmt.Sprintf("status=%d, error=%s", result.StatusCode, deliveryResult.Error)); err != nil {
 			logger.Error().Err(err).Msg("Failed to schedule retry")
 		} else {
 			logger.Info().
@@ -274,6 +271,9 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 
 		// Record stats
 		w.recordStats(ctx, "exhausted", &webhook)
+
+		// Cleanup retry data on exhaustion (terminal state)
+		w.cleanupRetryData(ctx, &webhook)
 	}
 
 	// Publish result
@@ -284,17 +284,28 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 	return nil
 }
 
+// scheduleRetry stores retry data and schedules the reference in ZSET
+func (w *Worker) scheduleRetry(ctx context.Context, webhook *domain.Webhook, scheduledAt time.Time, reason string) error {
+	// 1. Store Data (Compressed) - one per webhook, TTL refreshed
+	if err := w.hotstate.StoreRetryData(ctx, webhook, w.config.TTL.RetryDataTTL); err != nil {
+		return err
+	}
+	// 2. Schedule Reference in ZSET
+	return w.hotstate.ScheduleRetry(ctx, webhook.ID, webhook.Attempt, scheduledAt, reason)
+}
+
+// cleanupRetryData deletes the retry data on terminal states (success or DLQ)
+func (w *Worker) cleanupRetryData(ctx context.Context, webhook *domain.Webhook) {
+	if err := w.hotstate.DeleteRetryData(ctx, webhook.ID); err != nil {
+		log.Warn().Err(err).Str("webhook_id", string(webhook.ID)).Msg("Failed to cleanup retry data")
+	}
+}
+
 func (w *Worker) scheduleRetryForCircuit(ctx context.Context, webhook *domain.Webhook, circuitState domain.CircuitState) error {
 	nextRetryAt := w.retry.NextRetryAt(webhook.Attempt, circuitState)
 	webhook.ScheduledAt = nextRetryAt
 
-	retryMsg := &hotstate.RetryMessage{
-		Webhook:     webhook,
-		ScheduledAt: nextRetryAt,
-		Reason:      "circuit_open",
-	}
-
-	return w.hotstate.ScheduleRetry(ctx, retryMsg)
+	return w.scheduleRetry(ctx, webhook, nextRetryAt, "circuit_open")
 }
 
 func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, state string, result *domain.DeliveryResult) {
@@ -382,13 +393,7 @@ func (w *Worker) handleScriptError(ctx context.Context, webhook *domain.Webhook,
 		webhook.Attempt++
 		webhook.ScheduledAt = nextRetryAt
 
-		retryMsg := &hotstate.RetryMessage{
-			Webhook:     webhook,
-			ScheduledAt: nextRetryAt,
-			Reason:      fmt.Sprintf("script_error: %s", scriptError.Type),
-		}
-
-		if err := w.hotstate.ScheduleRetry(ctx, retryMsg); err != nil {
+		if err := w.scheduleRetry(ctx, webhook, nextRetryAt, fmt.Sprintf("script_error: %s", scriptError.Type)); err != nil {
 			logger.Error().Err(err).Msg("Failed to schedule retry for script error")
 		}
 

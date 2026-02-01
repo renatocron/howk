@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/howk/howk/internal/domain"
-	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,94 +33,162 @@ func TestSetStatus_GetStatus(t *testing.T) {
 	assert.Equal(t, status.State, gotStatus.State)
 }
 
-func TestScheduleRetry_PopDueRetries(t *testing.T) {
+func TestScheduleRetry_PopAndLockRetries(t *testing.T) {
 	hs := testutil.SetupRedis(t)
 	ctx := context.Background()
 
 	webhook := testutil.NewTestWebhook("http://example.com/retry")
-	retryMsg := &hotstate.RetryMessage{
-		Webhook:     webhook,
-		ScheduledAt: time.Now().Add(2 * time.Second), // Use 2 seconds to avoid Unix timestamp truncation issues
-		Reason:      "test",
-	}
+	webhook.Attempt = 1
 
-	err := hs.ScheduleRetry(ctx, retryMsg)
+	// Store retry data first
+	err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
 	require.NoError(t, err)
 
-	// Pop immediately - should get nothing
-	retries, err := hs.PopDueRetries(ctx, 10)
+	// Schedule retry reference
+	err = hs.ScheduleRetry(ctx, webhook.ID, webhook.Attempt, time.Now().Add(2*time.Second), "test")
 	require.NoError(t, err)
-	assert.Empty(t, retries)
+
+	// Pop immediately - should get nothing (not due yet)
+	refs, err := hs.PopAndLockRetries(ctx, 10, 30*time.Second)
+	require.NoError(t, err)
+	assert.Empty(t, refs)
 
 	// Wait for retry to be due
 	time.Sleep(3 * time.Second)
 
-	// Pop again - should get the webhook
-	retries, err = hs.PopDueRetries(ctx, 10)
+	// Pop again - should get the reference
+	refs, err = hs.PopAndLockRetries(ctx, 10, 30*time.Second)
 	require.NoError(t, err)
-	require.Len(t, retries, 1)
-	assert.Equal(t, webhook.ID, retries[0].Webhook.ID)
-	assert.Equal(t, retryMsg.Reason, retries[0].Reason)
+	require.Len(t, refs, 1)
+	assert.Equal(t, string(webhook.ID)+":1", refs[0])
 
-	// Pop again - should be empty
-	retries, err = hs.PopDueRetries(ctx, 10)
+	// Fetch data by webhookID
+	fetchedWebhook, err := hs.GetRetryData(ctx, webhook.ID)
 	require.NoError(t, err)
-	assert.Empty(t, retries)
+	assert.Equal(t, webhook.ID, fetchedWebhook.ID)
+
+	// Ack the retry (removes reference but not data)
+	err = hs.AckRetry(ctx, refs[0])
+	require.NoError(t, err)
+
+	// Verify reference is gone
+	refs, err = hs.PopAndLockRetries(ctx, 10, 30*time.Second)
+	require.NoError(t, err)
+	assert.Empty(t, refs)
+
+	// Cleanup data
+	err = hs.DeleteRetryData(ctx, webhook.ID)
+	require.NoError(t, err)
 }
 
-func TestPopDueRetries_OnlyDue(t *testing.T) {
+func TestPopAndLockRetries_OnlyDue(t *testing.T) {
 	hs := testutil.SetupRedis(t)
 	ctx := context.Background()
 
-	// Schedule one in the past, one in the future
+	// Schedule one in the past (due), one in the future (not due)
 	whPast := testutil.NewTestWebhook("http://example.com/past")
-	pastMsg := &hotstate.RetryMessage{
-		Webhook:     whPast,
-		ScheduledAt: time.Now().Add(-100 * time.Millisecond),
-	}
-	err := hs.ScheduleRetry(ctx, pastMsg)
+	err := hs.StoreRetryData(ctx, whPast, 7*24*time.Hour)
+	require.NoError(t, err)
+	err = hs.ScheduleRetry(ctx, whPast.ID, 1, time.Now().Add(-100*time.Millisecond), "past")
 	require.NoError(t, err)
 
 	whFuture := testutil.NewTestWebhook("http://example.com/future")
-	futureMsg := &hotstate.RetryMessage{
-		Webhook:     whFuture,
-		ScheduledAt: time.Now().Add(1 * time.Hour),
-	}
-	err = hs.ScheduleRetry(ctx, futureMsg)
+	err = hs.StoreRetryData(ctx, whFuture, 7*24*time.Hour)
+	require.NoError(t, err)
+	err = hs.ScheduleRetry(ctx, whFuture.ID, 1, time.Now().Add(1*time.Hour), "future")
 	require.NoError(t, err)
 
-	retries, err := hs.PopDueRetries(ctx, 10)
+	// Pop due retries
+	refs, err := hs.PopAndLockRetries(ctx, 10, 30*time.Second)
 	require.NoError(t, err)
-	require.Len(t, retries, 1)
-	assert.Equal(t, whPast.ID, retries[0].Webhook.ID)
+	require.Len(t, refs, 1)
+	assert.Contains(t, refs, string(whPast.ID)+":1")
 
-	// The future one should still be there
+	// Ack the popped retry
+	err = hs.AckRetry(ctx, refs[0])
+	require.NoError(t, err)
+
+	// The future one should still be there (in the queue, locked score in future)
 	count, err := hs.Client().ZCount(ctx, "retries", "-inf", "+inf").Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)
+
+	// Cleanup
+	hs.DeleteRetryData(ctx, whPast.ID)
+	hs.DeleteRetryData(ctx, whFuture.ID)
 }
 
-func TestPopDueRetries_BatchSize(t *testing.T) {
+func TestPopAndLockRetries_BatchSize(t *testing.T) {
 	hs := testutil.SetupRedis(t)
 	ctx := context.Background()
 
+	webhooks := make([]*domain.Webhook, 5)
 	for i := 0; i < 5; i++ {
-		webhook := testutil.NewTestWebhook("http://example.com/batch")
-		retryMsg := &hotstate.RetryMessage{
-			Webhook:     webhook,
-			ScheduledAt: time.Now().Add(-10 * time.Second), // All due
-		}
-		err := hs.ScheduleRetry(ctx, retryMsg)
+		webhooks[i] = testutil.NewTestWebhook("http://example.com/batch")
+		err := hs.StoreRetryData(ctx, webhooks[i], 7*24*time.Hour)
+		require.NoError(t, err)
+		err = hs.ScheduleRetry(ctx, webhooks[i].ID, i, time.Now().Add(-10*time.Second), "batch") // All due
 		require.NoError(t, err)
 	}
 
-	retries, err := hs.PopDueRetries(ctx, 3)
+	refs, err := hs.PopAndLockRetries(ctx, 3, 30*time.Second)
 	require.NoError(t, err)
-	require.Len(t, retries, 3)
+	require.Len(t, refs, 3)
 
+	// The remaining 2 should still be in the queue but with locked scores (in the future)
+	// ZCount returns ALL items, including locked ones
 	count, err := hs.Client().ZCount(ctx, "retries", "-inf", "+inf").Result()
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), count) // 2 remaining
+	assert.Equal(t, int64(5), count) // All 5 still in queue (3 locked, 2 pending)
+
+	// Cleanup remaining data
+	for _, wh := range webhooks {
+		hs.DeleteRetryData(ctx, wh.ID)
+	}
+
+	// Clean up the retry queue
+	hs.Client().Del(ctx, "retries")
+}
+
+func TestRetryDataLifecycle(t *testing.T) {
+	hs := testutil.SetupRedis(t)
+	ctx := context.Background()
+
+	webhook := testutil.NewTestWebhook("http://example.com/lifecycle")
+
+	// 1. Store data
+	err := hs.StoreRetryData(ctx, webhook, 7*24*time.Hour)
+	require.NoError(t, err)
+
+	// 2. Schedule multiple attempts
+	for i := 1; i <= 3; i++ {
+		err = hs.ScheduleRetry(ctx, webhook.ID, i, time.Now().Add(time.Duration(i)*time.Second), "attempt")
+		require.NoError(t, err)
+	}
+
+	// 3. Verify data exists
+	fetched, err := hs.GetRetryData(ctx, webhook.ID)
+	require.NoError(t, err)
+	assert.Equal(t, webhook.ID, fetched.ID)
+
+	// 4. Ack all references
+	for i := 1; i <= 3; i++ {
+		ref := string(webhook.ID) + ":" + string(rune('0'+i))
+		hs.AckRetry(ctx, ref)
+	}
+
+	// 5. Data should still exist
+	fetched, err = hs.GetRetryData(ctx, webhook.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, fetched)
+
+	// 6. Delete data explicitly (terminal state)
+	err = hs.DeleteRetryData(ctx, webhook.ID)
+	require.NoError(t, err)
+
+	// 7. Data should be gone
+	_, err = hs.GetRetryData(ctx, webhook.ID)
+	assert.Error(t, err)
 }
 
 func TestIncrStats_GetStats(t *testing.T) {

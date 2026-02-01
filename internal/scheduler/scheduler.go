@@ -2,30 +2,31 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
+	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
 )
 
 // Scheduler pops due retries from Redis and re-enqueues them to Kafka
 type Scheduler struct {
 	config    config.SchedulerConfig
-	hotstate  *hotstate.RedisHotState
-	publisher *broker.KafkaWebhookPublisher
-	// Add logger
-	logger zerolog.Logger
+	hotstate  hotstate.HotState
+	publisher broker.WebhookPublisher
 }
 
 // NewScheduler creates a new retry scheduler
 func NewScheduler(
 	cfg config.SchedulerConfig,
-	hs *hotstate.RedisHotState,
-	pub *broker.KafkaWebhookPublisher,
+	hs hotstate.HotState,
+	pub broker.WebhookPublisher,
 ) *Scheduler {
 	return &Scheduler{
 		config:    cfg,
@@ -39,6 +40,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	log.Info().
 		Dur("poll_interval", s.config.PollInterval).
 		Int("batch_size", s.config.BatchSize).
+		Dur("lock_timeout", s.config.LockTimeout).
 		Msg("Scheduler starting...")
 
 	ticker := time.NewTicker(s.config.PollInterval)
@@ -58,63 +60,92 @@ func (s *Scheduler) Run(ctx context.Context) error {
 }
 
 func (s *Scheduler) processBatch(ctx context.Context) error {
-	// Pop due retries atomically
-	retries, err := s.hotstate.PopDueRetries(ctx, s.config.BatchSize)
+	// Pop due retries and lock them (visibility timeout)
+	// We use LockTimeout from config as the visibility timeout
+	lockDuration := s.config.LockTimeout
+
+	refs, err := s.hotstate.PopAndLockRetries(ctx, s.config.BatchSize, lockDuration)
 	if err != nil {
 		return err
 	}
 
-	if len(retries) == 0 {
+	if len(refs) == 0 {
 		return nil
 	}
 
-	log.Debug().Int("count", len(retries)).Msg("Processing due retries")
+	log.Debug().Int("count", len(refs)).Msg("Processing due retries")
 
-	var published, failed int
+	var published, failed, expired int
 
-	for _, retry := range retries {
-		if retry.Webhook == nil {
+	for _, ref := range refs {
+		// 1. Parse reference to get webhookID and attempt
+		webhookID, attempt, err := parseReference(ref)
+		if err != nil {
+			log.Error().Str("ref", ref).Msg("Invalid reference format, removing")
+			s.hotstate.AckRetry(ctx, ref)
+			continue
+		}
+
+		// 2. Fetch Data by webhookID (not by full reference)
+		webhook, err := s.hotstate.GetRetryData(ctx, webhookID)
+		if err != nil {
+			// Data missing means likely expired or already handled
+			log.Warn().Str("ref", ref).Str("webhook_id", string(webhookID)).Msg("Retry data missing, removing reference")
+			s.hotstate.AckRetry(ctx, ref)
+			expired++
+			continue
+		}
+
+		// 3. Update attempt from reference (data may have stale attempt number)
+		webhook.Attempt = attempt
+
+		// 4. Publish to Kafka
+		if err := s.publisher.PublishWebhook(ctx, webhook); err != nil {
 			log.Error().
-				Interface("retry_message", retry).
-				Str("reason", retry.Reason).
-				Time("scheduled_at", retry.ScheduledAt).
-				Msg("CRITICAL: Retry message has nil webhook - data corruption")
+				Err(err).
+				Str("webhook_id", string(webhook.ID)).
+				Msg("Failed to re-enqueue retry")
 
-			// Don't lose the message - republish to Kafka DLQ for investigation
-			// This allows ops to fix and replay later
+			// Do NOT Ack.
+			// The item remains in ZSET with future score (locked).
+			// It will be retried automatically when lock expires.
 			failed++
 			continue
 		}
 
-		// Re-publish to Kafka pending topic
-		if err := s.publisher.PublishWebhook(ctx, retry.Webhook); err != nil {
-			log.Error().
-				Err(err).
-				Str("webhook_id", string(retry.Webhook.ID)).
-				Msg("Failed to re-enqueue retry")
-
-			// Re-schedule for later (don't lose the message)
-			retry.ScheduledAt = time.Now().Add(30 * time.Second)
-			if err := s.hotstate.ScheduleRetry(ctx, retry); err != nil {
-				log.Error().Err(err).Msg("Failed to re-schedule retry")
-			}
-			failed++
-			continue
+		// 5. Ack (remove from ZSET + meta only, NOT data)
+		if err := s.hotstate.AckRetry(ctx, ref); err != nil {
+			// Non-fatal, just means it might get redelivered if we don't clean up
+			log.Warn().Err(err).Str("ref", ref).Msg("Failed to ack retry")
 		}
 
 		published++
 		log.Debug().
-			Str("webhook_id", string(retry.Webhook.ID)).
-			Int("attempt", retry.Webhook.Attempt).
+			Str("webhook_id", string(webhook.ID)).
+			Int("attempt", webhook.Attempt).
 			Msg("Retry re-enqueued")
 	}
 
-	if published > 0 || failed > 0 {
+	if published > 0 || failed > 0 || expired > 0 {
 		log.Info().
 			Int("published", published).
 			Int("failed", failed).
+			Int("expired", expired).
 			Msg("Batch processed")
 	}
 
 	return nil
+}
+
+// parseReference parses a reference string "webhook_id:attempt" into its components
+func parseReference(ref string) (domain.WebhookID, int, error) {
+	parts := strings.Split(ref, ":")
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("invalid reference format: %s", ref)
+	}
+	attempt, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid attempt number in reference %s: %w", ref, err)
+	}
+	return domain.WebhookID(parts[0]), attempt, nil
 }

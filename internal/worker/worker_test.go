@@ -8,16 +8,15 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
-	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/worker"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
 
 // MockBroker implements broker.Broker
@@ -85,17 +84,40 @@ func (m *MockHotState) GetStatus(ctx context.Context, webhookID domain.WebhookID
 	return args.Get(0).(*domain.WebhookStatus), args.Error(1)
 }
 
-func (m *MockHotState) ScheduleRetry(ctx context.Context, msg *hotstate.RetryMessage) error {
-	args := m.Called(ctx, msg)
+func (m *MockHotState) StoreRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error {
+	args := m.Called(ctx, webhook, ttl)
 	return args.Error(0)
 }
 
-func (m *MockHotState) PopDueRetries(ctx context.Context, limit int) ([]*hotstate.RetryMessage, error) {
-	args := m.Called(ctx, limit)
+func (m *MockHotState) ScheduleRetry(ctx context.Context, webhookID domain.WebhookID, attempt int, scheduledAt time.Time, reason string) error {
+	args := m.Called(ctx, webhookID, attempt, scheduledAt, reason)
+	return args.Error(0)
+}
+
+func (m *MockHotState) PopAndLockRetries(ctx context.Context, limit int, lockDuration time.Duration) ([]string, error) {
+	args := m.Called(ctx, limit, lockDuration)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*hotstate.RetryMessage), args.Error(1)
+	return args.Get(0).([]string), args.Error(1)
+}
+
+func (m *MockHotState) GetRetryData(ctx context.Context, webhookID domain.WebhookID) (*domain.Webhook, error) {
+	args := m.Called(ctx, webhookID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Webhook), args.Error(1)
+}
+
+func (m *MockHotState) AckRetry(ctx context.Context, reference string) error {
+	args := m.Called(ctx, reference)
+	return args.Error(0)
+}
+
+func (m *MockHotState) DeleteRetryData(ctx context.Context, webhookID domain.WebhookID) error {
+	args := m.Called(ctx, webhookID)
+	return args.Error(0)
 }
 
 func (m *MockHotState) GetCircuit(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {

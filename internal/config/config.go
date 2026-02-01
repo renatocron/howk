@@ -16,6 +16,7 @@ type TTLConfig struct {
 	StatusTTL       time.Duration `mapstructure:"status_ttl"`
 	StatsTTL        time.Duration `mapstructure:"stats_ttl"`
 	IdempotencyTTL  time.Duration `mapstructure:"idempotency_ttl"`
+	RetryDataTTL    time.Duration `mapstructure:"retry_data_ttl"` // NEW: TTL for compressed retry data
 }
 
 // Config is the root configuration
@@ -312,6 +313,7 @@ func bindEnvVariables(v *viper.Viper) error {
 		"ttl.status_ttl",
 		"ttl.stats_ttl",
 		"ttl.idempotency_ttl",
+		"ttl.retry_data_ttl",
 		// Lua
 		"lua.enabled",
 		"lua.timeout",
