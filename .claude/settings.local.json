@@ -20,5 +20,8 @@
       "Bash(pkill:*)",
       "Bash(curl:*)"
     ]
+  },
+  "enabledPlugins": {
+    "gosmith@gosmith": true
   }
 }

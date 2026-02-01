@@ -330,3 +330,46 @@ func TestNewWorker(t *testing.T) {
 	assert.Equal(t, mockDeliveryClient, w.GetDelivery())
 	assert.Equal(t, mockRetryStrategy, w.GetRetry())
 }
+
+// TestWorkerGetConfig tests the GetConfig accessor
+func TestWorkerGetConfig(t *testing.T) {
+	w, _, _, _, _, _, _ := setupWorkerTest()
+	cfg := w.GetConfig()
+	assert.NotNil(t, cfg)
+}
+
+// TestWorkerGetBroker tests the GetBroker accessor
+func TestWorkerGetBroker(t *testing.T) {
+	w, broker, _, _, _, _, _ := setupWorkerTest()
+	assert.Equal(t, broker, w.GetBroker())
+}
+
+// TestWorkerGetPublisher tests the GetPublisher accessor
+func TestWorkerGetPublisher(t *testing.T) {
+	w, _, publisher, _, _, _, _ := setupWorkerTest()
+	assert.Equal(t, publisher, w.GetPublisher())
+}
+
+// TestWorkerGetHotState tests the GetHotState accessor
+func TestWorkerGetHotState(t *testing.T) {
+	w, _, _, hotstate, _, _, _ := setupWorkerTest()
+	assert.Equal(t, hotstate, w.GetHotState())
+}
+
+// TestWorkerGetCircuit tests the GetCircuit accessor
+func TestWorkerGetCircuit(t *testing.T) {
+	w, _, _, _, circuit, _, _ := setupWorkerTest()
+	assert.Equal(t, circuit, w.GetCircuit())
+}
+
+// TestWorkerGetDelivery tests the GetDelivery accessor
+func TestWorkerGetDelivery(t *testing.T) {
+	w, _, _, _, _, delivery, _ := setupWorkerTest()
+	assert.Equal(t, delivery, w.GetDelivery())
+}
+
+// TestWorkerGetRetry tests the GetRetry accessor
+func TestWorkerGetRetry(t *testing.T) {
+	w, _, _, _, _, _, retrier := setupWorkerTest()
+	assert.Equal(t, retrier, w.GetRetry())
+}

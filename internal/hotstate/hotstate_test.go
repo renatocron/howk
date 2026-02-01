@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	redismock "github.com/go-redis/redismock/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -218,4 +219,119 @@ func TestRedisHotState_Close(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, mockClient.ExpectationsWereMet())
+}
+
+
+// --- Retry Scheduling Tests ---
+
+func TestRedisHotState_ScheduleRetry(t *testing.T) {
+	ctx := context.Background()
+	msg := &RetryMessage{
+		Webhook: &domain.Webhook{
+			ID:       domain.WebhookID("wh-123"),
+			ConfigID: domain.ConfigID("config-1"),
+			Endpoint: "https://example.com/webhook",
+		},
+		ScheduledAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		Reason:      "circuit_open",
+	}
+
+	payload, _ := json.Marshal(msg)
+	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
+
+	mockClient.ExpectZAdd("retries", redis.Z{
+		Score:  float64(msg.ScheduledAt.Unix()),
+		Member: payload,
+	}).SetVal(1)
+
+	err := state.ScheduleRetry(ctx, msg)
+	require.NoError(t, err)
+	require.NoError(t, mockClient.ExpectationsWereMet())
+}
+
+
+// --- AddToHLL_Empty Test ---
+
+func TestRedisHotState_AddToHLL_Empty(t *testing.T) {
+	ctx := context.Background()
+	state, _ := newMockedHotState(t, defaultCircuitConfig)
+
+	err := state.AddToHLL(ctx, "endpoints:2026010112")
+	require.NoError(t, err)
+}
+
+// --- Script Operations Tests ---
+
+func TestRedisHotState_GetScript_Found(t *testing.T) {
+	ctx := context.Background()
+	configID := domain.ConfigID("config-1")
+	scriptJSON := `{"lua_code":"return payload","hash":"abc123"}`
+
+	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
+	mockClient.ExpectGet("script:config-1").SetVal(scriptJSON)
+
+	result, err := state.GetScript(ctx, configID)
+	require.NoError(t, err)
+	assert.Equal(t, scriptJSON, result)
+}
+
+func TestRedisHotState_GetScript_NotFound(t *testing.T) {
+	ctx := context.Background()
+	configID := domain.ConfigID("config-1")
+
+	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
+	mockClient.ExpectGet("script:config-1").RedisNil()
+
+	result, err := state.GetScript(ctx, configID)
+	require.Error(t, err)
+	assert.Equal(t, "", result)
+}
+
+func TestRedisHotState_SetScript(t *testing.T) {
+	ctx := context.Background()
+	configID := domain.ConfigID("config-1")
+	scriptJSON := `{"lua_code":"return payload","hash":"abc123"}`
+	ttl := 24 * time.Hour
+
+	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
+	mockClient.ExpectSet("script:config-1", scriptJSON, ttl).SetVal("OK")
+
+	err := state.SetScript(ctx, configID, scriptJSON, ttl)
+	require.NoError(t, err)
+}
+
+func TestRedisHotState_DeleteScript(t *testing.T) {
+	ctx := context.Background()
+	configID := domain.ConfigID("config-1")
+
+	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
+	mockClient.ExpectDel("script:config-1").SetVal(1)
+
+	err := state.DeleteScript(ctx, configID)
+	require.NoError(t, err)
+}
+
+// --- FlushForRebuild Test ---
+
+func TestRedisHotState_FlushForRebuild(t *testing.T) {
+	ctx := context.Background()
+	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
+
+	// For pattern matching scans
+	mockClient.ExpectScan(0, "status:*", 1000).SetVal([]string{"status:wh-123"}, 0)
+	mockClient.ExpectDel("status:wh-123").SetVal(1)
+
+	mockClient.ExpectDel("retries").SetVal(0)
+
+	mockClient.ExpectScan(0, "processed:*", 1000).SetVal([]string{"processed:wh-123:1"}, 0)
+	mockClient.ExpectDel("processed:wh-123:1").SetVal(1)
+
+	mockClient.ExpectScan(0, "stats:*", 1000).SetVal([]string{}, 0)
+
+	mockClient.ExpectScan(0, "hll:*", 1000).SetVal([]string{}, 0)
+
+	mockClient.ExpectScan(0, "circuit:*", 1000).SetVal([]string{}, 0)
+
+	err := state.FlushForRebuild(ctx)
+	require.NoError(t, err)
 }

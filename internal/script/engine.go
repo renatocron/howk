@@ -106,24 +106,24 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 		}
 	}
 
-	// Get Lua state from pool
-	L := e.pool.Get().(*lua.LState)
-	defer func() {
-		// Reset state before returning to pool
-		L.SetTop(0)
-		e.pool.Put(L)
-	}()
-
-	// Set up timeout
+	// Set up timeout that covers the entire execution
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)
 	defer cancel()
 
-	// Run script execution in goroutine to enforce timeout
+	// Channels to receive result from goroutine
 	resultCh := make(chan *TransformResult, 1)
 	errCh := make(chan error, 1)
 
 	go func() {
-		result, err := e.executeScript(L, scriptConfig.LuaCode, webhook)
+		// The goroutine now manages the lifecycle of the Lua state
+		L := e.pool.Get().(*lua.LState)
+		defer func() {
+			L.SetTop(0)
+			e.pool.Put(L)
+		}()
+
+		// Pass the timeout context to the script executor
+		result, err := e.executeScript(timeoutCtx, L, scriptConfig.LuaCode, webhook)
 		if err != nil {
 			errCh <- err
 		} else {
@@ -131,18 +131,25 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 		}
 	}()
 
-	// Wait for result or timeout
+	// Wait for result, or timeout
 	select {
 	case <-timeoutCtx.Done():
-		// Force close the Lua state to stop execution
-		L.Close()
-		// Create new state for pool
-		e.pool.Put(e.newLuaState())
+		// The context cancellation will cause the PCall in the goroutine to fail.
+		// The goroutine will clean itself up. We just return the timeout error.
 		return nil, &ScriptError{
 			Type:    ScriptErrorTimeout,
 			Message: fmt.Sprintf("Script execution exceeded timeout of %v", e.config.Timeout),
+			Cause:   ctx.Err(),
 		}
 	case err := <-errCh:
+		// If the error is due to context cancellation, classify it as a timeout.
+		if err == context.Canceled || err == context.DeadlineExceeded {
+			return nil, &ScriptError{
+				Type:    ScriptErrorTimeout,
+				Message: "Script execution cancelled",
+				Cause:   err,
+			}
+		}
 		return nil, err
 	case result := <-resultCh:
 		// Apply transformation to webhook
@@ -151,7 +158,10 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 }
 
 // executeScript runs the Lua code and extracts the transformation
-func (e *Engine) executeScript(L *lua.LState, luaCode string, webhook *domain.Webhook) (*TransformResult, error) {
+func (e *Engine) executeScript(ctx context.Context, L *lua.LState, luaCode string, webhook *domain.Webhook) (*TransformResult, error) {
+	// Set context for cancellation
+	L.SetContext(ctx)
+
 	// Inject input globals
 	if err := e.injectInputGlobals(L, webhook); err != nil {
 		return nil, &ScriptError{
@@ -180,6 +190,10 @@ func (e *Engine) executeScript(L *lua.LState, luaCode string, webhook *domain.We
 
 	L.Push(fn)
 	if err := L.PCall(0, 0, nil); err != nil {
+		// If PCall fails, check if it was due to the context being cancelled.
+		if ctx.Err() != nil {
+			return nil, ctx.Err() // Return context error directly
+		}
 		return nil, &ScriptError{
 			Type:    ScriptErrorRuntime,
 			Message: "Lua runtime error",
