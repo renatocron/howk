@@ -1,41 +1,112 @@
-# CLAUDE.md
+# HOWK - Agent Guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This document provides essential information for AI coding agents working with the HOWK codebase.
 
-## Overview
+## Project Overview
 
-HOWK (High Opinionated Webhook Kit) is a high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis. The system follows a strict philosophy: **Kafka is the source of truth**, Redis is rebuildable hot state, and circuit breakers protect endpoints.
+**HOWK** (High Opinionated Webhook Kit) is a high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis. It follows a strict philosophy: **Kafka is the source of truth**, Redis is rebuildable hot state, and circuit breakers protect endpoints.
+
+### Core Philosophy
+- **Kafka is the source of truth** — every webhook and delivery result is a Kafka record
+- **Redis is rebuildable hot state** — if Redis dies, replay from Kafka
+- **Circuit breakers protect endpoints** — failing endpoints don't burn your retry budget
+- **At-least-once delivery** — we never lose a webhook, duplicates are the receiver's problem
+
+## Technology Stack
+
+| Component | Technology |
+|-----------|------------|
+| Language | Go 1.24.0 |
+| Message Queue | Kafka (Redpanda for local dev) |
+| Hot State | Redis 7 |
+| HTTP Framework | Gin |
+| Logging | zerolog |
+| Configuration | viper |
+| Testing | testify, miniredis |
+| Scripting | Lua (gopher-lua) |
+| Build | Make |
 
 ## Project Structure
 
 ```
-cmd/
-  api/         - HTTP API for enqueueing webhooks
-  worker/      - Consumes pending webhooks and delivers them
-  scheduler/   - Pops due retries from Redis and re-enqueues to Kafka
-  reconciler/  - Rebuilds Redis state from Kafka replay
+cmd/                          # Entry points for each binary
+  api/main.go                 # HTTP API server
+  worker/main.go              # Webhook delivery worker
+  scheduler/main.go           # Retry scheduler
+  reconciler/main.go          # State rebuilder from Kafka
 
-internal/
-  domain/      - Core types (Webhook, DeliveryResult, CircuitBreaker)
-  config/      - Configuration structs with defaults
-  broker/      - Kafka abstraction (KafkaBroker, WebhookPublisher)
-  hotstate/    - Redis hot state management (circuit breakers, retries, status)
-  circuit/     - Circuit breaker implementation (per-endpoint state machine)
-  retry/       - Retry strategy (exponential backoff with jitter)
-  delivery/    - HTTP client for webhook delivery
-  worker/      - Worker loop (consume, check circuit, deliver, produce result)
-  scheduler/   - Scheduler loop (poll Redis sorted set, re-enqueue)
-  api/         - Gin HTTP server with enqueue and status endpoints
-  reconciler/  - State rebuilder from Kafka replay
-  script/      - Lua scripting engine with kv, http, crypto modules
+internal/                     # Internal packages
+  domain/                     # Core domain types
+    types.go                  # Webhook, DeliveryResult, CircuitBreaker types
+  config/                     # Configuration management
+    config.go                 # Config structs and loading
+  broker/                     # Kafka abstraction
+    kafka.go                  # Kafka broker implementation
+    broker.go                 # Publisher interface
+  hotstate/                   # Redis hot state management
+    redis.go                  # Redis client
+    hotstate.go               # State operations (retries, status, stats)
+    compression.go            # Gzip compression for retry data
+  circuit/                    # Circuit breaker
+    breaker.go                # Per-endpoint circuit breaker
+  retry/                      # Retry strategy
+    strategy.go               # Exponential backoff with jitter
+  delivery/                   # HTTP delivery
+    client.go                 # Webhook HTTP client with signing
+  worker/                     # Worker implementation
+    worker.go                 # Main worker loop
+  scheduler/                  # Scheduler implementation
+    scheduler.go              # Retry polling and re-enqueue
+  api/                        # HTTP handlers
+    server.go                 # Gin server setup
+    h_webhook.go              # Webhook enqueue/status handlers
+    h_script.go               # Lua script management handlers
+    h_check_deps.go           # Health check handler
+  script/                     # Lua scripting engine
+    engine.go                 # Sandboxed Lua execution
+    loader.go                 # Script loading/caching
+    validator.go              # Script validation
+    publisher.go              # Script publishing to Kafka
+    modules/                  # Lua modules
+      kv.go                   # Redis-backed key-value storage
+      http.go                 # HTTP GET with allowlist
+      crypto.go               # RSA credential decryption
+      base64.go               # Base64 encoding
+      log.go                  # Structured logging
+  reconciler/                 # State recovery
+    reconciler.go             # Kafka replay to rebuild Redis
+  testutil/                   # Test utilities
+    testutil.go               # Test helpers
+    fixtures.go               # Test data
+    redis.go                  # Redis test setup
+    kafka.go                  # Kafka test setup
+
+docs/                         # Documentation
+  FAILURE_MODES.md            # Failure scenarios and recovery
+
+.docker-compose.yml           # Local infrastructure (Kafka, Redis, echo server)
+Makefile                      # Build and test commands
+config.example.yaml           # Example configuration
+.env.example                  # Example environment variables
 ```
 
-## Commands
-
-### Infrastructure
+## Build Commands
 
 ```bash
-# Start infrastructure (Redpanda/Kafka + Redis)
+# Build all binaries
+make build
+
+# Build individual components
+go build -o bin/howk-api ./cmd/api
+go build -o bin/howk-worker ./cmd/worker
+go build -o bin/howk-scheduler ./cmd/scheduler
+go build -o bin/howk-reconciler ./cmd/reconciler
+```
+
+## Development Commands
+
+```bash
+# Start infrastructure (Kafka, Redis, echo server)
 make infra
 
 # Stop infrastructure
@@ -43,102 +114,161 @@ make infra-down
 
 # Clean infrastructure (removes volumes)
 make infra-clean
-```
 
-After `make infra`, services are available at:
-- Kafka: `localhost:19092`
-- Redis: `localhost:6379`
-- Redpanda Console: `http://localhost:8888`
-- Webhook echo server: `http://localhost:8090`
+# Run components individually (for development)
+make run-api        # API server on :8080
+make run-worker     # Worker
+make run-scheduler  # Scheduler
 
-### Build
-
-```bash
-# Build all binaries
-make build
-
-# Binaries output to bin/howk-{api,worker,scheduler}
-```
-
-### Running Components
-
-```bash
-# Run individual components (development mode)
-make run-api        # Start API server on :8080
-make run-worker     # Start worker
-make run-scheduler  # Start scheduler
-
-# Or run everything together
+# Run all components together
 make run-all
 ```
 
-### Testing
+## Testing Commands
 
 ```bash
-# Run all tests
-make test
+# Run unit tests only (fast, no infrastructure needed)
+make test-unit
 
-# Run tests with coverage
+# Run integration tests (requires Docker infrastructure)
+make test-integration
+
+# Run all tests with coverage
 make test-coverage
 
-# Quick manual tests
-make test-enqueue              # Enqueue a test webhook
-make test-status ID=wh_xxx     # Check webhook status
-make test-stats                # View system stats
-```
-
-### Development
-
-```bash
-# Format code
-make fmt
+# CI test pipeline (unit + integration)
+make test-ci
 
 # Lint code
 make lint
 
-# Update dependencies
-make deps
+# Format code
+make fmt
 ```
 
-## Architecture Principles
+### Test Structure
 
-### Kafka as Source of Truth
+- **Unit tests:** Fast, use `miniredis` for Redis mocking, no external dependencies
+- **Integration tests:** Require Docker infrastructure, marked with `//go:build integration` tag
+- **Test utilities:** Located in `internal/testutil/`
 
-- **Every webhook** is a record in `howk.pending` topic
-- **Every delivery result** is a record in `howk.results` topic
-- **Exhausted retries** go to `howk.deadletter` topic
-- **Script configurations** are in `howk.scripts` topic (compacted)
-- Retention: 7 days (configurable, except scripts which are compacted)
-- If Redis dies, replay Kafka to rebuild state
+### Test Environment Variables
 
-### Redis as Hot State
+```bash
+TEST_REDIS_ADDR=localhost:6380      # Default for Docker Redis
+TEST_KAFKA_BROKERS=localhost:19092  # Default for Docker Kafka
+```
 
-Redis stores rebuildable, ephemeral state:
+## Configuration
 
-1. **Circuit Breaker State** (per endpoint hash):
-   ```
-   HSET circuit:{endpoint_hash} state=OPEN failures=5 last_failure_at=...
-   ```
+Configuration is loaded with priority (highest to lowest):
+1. Environment variables (`HOWK_*` prefix)
+2. Config file (YAML)
+3. Built-in defaults
 
-2. **Retry Queue** (sorted set by next retry time):
-   ```
-   ZADD retries <next_at_unix> <webhook_json>
-   ```
+### Environment Variables
 
-3. **Webhook Status** (per webhook ID):
-   ```
-   HSET status:{webhook_id} state=delivered attempt=1 last_status_code=200 ...
-   ```
+All config can be overridden via `HOWK_*` prefixed environment variables:
 
-4. **Statistics** (hourly buckets):
-   ```
-   INCR stats:delivered:2026013015
-   PFADD stats:hll:endpoints:2026013015 {endpoint}
-   ```
+```bash
+HOWK_API_PORT=9090
+HOWK_KAFKA_BROKERS=localhost:19092,kafka2:9092
+HOWK_REDIS_ADDR=redis.example.com:6379
+HOWK_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3
+```
 
-### Circuit Breaker
+See `.env.example` for complete list.
 
-Per-endpoint circuit breaker with three states:
+### Config File Locations
+
+Searched in order (if `--config` not specified):
+1. Current directory (`./config.yaml`)
+2. Home directory (`~/.howk/config.yaml`)
+3. System config (`/etc/howk/config.yaml`)
+
+### Key Configuration Sections
+
+```yaml
+api:                    # HTTP API settings
+  port: 8080
+  read_timeout: 10s
+  write_timeout: 10s
+
+kafka:                  # Kafka configuration
+  brokers: [localhost:19092]
+  topics:
+    pending: howk.pending
+    results: howk.results
+    deadletter: howk.deadletter
+    scripts: howk.scripts
+
+redis:                  # Redis configuration
+  addr: localhost:6379
+  password: ""
+  pool_size: 100
+
+delivery:               # HTTP delivery settings
+  timeout: 30s
+  max_idle_conns: 100
+
+retry:                  # Retry strategy
+  base_delay: 10s
+  max_delay: 24h
+  max_attempts: 20
+  jitter: 0.2
+
+circuit_breaker:        # Circuit breaker settings
+  failure_threshold: 5
+  recovery_timeout: 5m
+
+scheduler:              # Scheduler settings
+  poll_interval: 1s
+  batch_size: 500
+
+ttl:                    # Redis key TTLs
+  circuit_state_ttl: 24h
+  status_ttl: 168h
+  stats_ttl: 48h
+
+lua:                    # Lua scripting (disabled by default)
+  enabled: false
+  timeout: 500ms
+  memory_limit_mb: 50
+  allowed_hosts: ["*"]
+```
+
+## Architecture Details
+
+### Data Flow
+
+1. **API** receives webhook → validates → batch produces to `howk.pending` → returns 202
+2. **Worker** consumes `howk.pending` → checks circuit → [OPTIONAL: executes Lua script] → fires HTTP → produces `DeliveryResult` to `howk.results`
+3. If retry needed: Worker schedules retry in Redis sorted set
+4. **Scheduler** polls Redis sorted set → re-enqueues due webhooks to `howk.pending`
+5. **Results consumer** (part of worker) updates Redis state from `howk.results`
+
+### Kafka Topics
+
+| Topic | Purpose | Partitions | Retention |
+|-------|---------|------------|-----------|
+| `howk.pending` | Webhooks to deliver | 6 | 7 days |
+| `howk.results` | Delivery outcomes | 6 | 7 days |
+| `howk.deadletter` | Exhausted retries | 3 | 7 days |
+| `howk.scripts` | Lua script configs | 3 | compacted |
+
+### Redis Key Structure
+
+```
+circuit:{endpoint_hash}     # Circuit breaker state (hash)
+retries                     # Retry queue (sorted set by timestamp)
+retry_data:{webhook_id}     # Compressed webhook data (string)
+retry_meta:{id}:{attempt}   # Retry metadata (hash)
+status:{webhook_id}         # Webhook delivery status (hash)
+stats:{metric}:{hour}       # Hourly statistics (string)
+```
+
+### Circuit Breaker States
+
 - **CLOSED**: Normal operation, failures counted in window
 - **OPEN**: Endpoint is down, don't attempt delivery, schedule far future retry
 - **HALF_OPEN**: Recovery timeout expired, allow ONE probe request
@@ -148,8 +278,6 @@ State transitions:
 - OPEN → HALF_OPEN: recovery timeout expires
 - HALF_OPEN → CLOSED: probe succeeds
 - HALF_OPEN → OPEN: probe fails
-
-Circuit state is keyed by `EndpointHash` (SHA256 of endpoint URL first 16 bytes).
 
 ### Retry Strategy
 
@@ -166,218 +294,205 @@ Circuit OPEN:      delay = recovery_timeout (5 minutes)
 Circuit HALF_OPEN: immediate (it's a probe)
 ```
 
-### Data Flow
+## Lua Scripting Engine
 
-1. **API** receives webhook → validates → batch produces to `howk.pending` → returns 202
-2. **Worker** consumes `howk.pending` → checks circuit → **[OPTIONAL: executes Lua script]** → fires HTTP → produces `DeliveryResult` to `howk.results`
-3. If retry needed: Worker schedules retry in Redis sorted set
-4. **Scheduler** polls Redis sorted set → re-enqueues due webhooks to `howk.pending`
-5. **Results consumer** (part of worker) updates Redis state from `howk.results`
+HOWK supports per-config payload transformation via sandboxed Lua scripts.
 
-### Lua Scripting Engine
+### Feature Flag
 
-HOWK supports per-config payload transformation via sandboxed Lua scripts executed before HTTP delivery.
+Scripts are **disabled by default**. Must explicitly enable:
 
-**Topic**: `howk.scripts` (compacted topic)
-- **Key**: `config_id`
-- **Value**: `ScriptConfig` JSON (lua_code, hash, version, timestamps)
-- **Cleanup Policy**: compact (latest script per config)
+```bash
+HOWK_LUA_ENABLED=true
+```
 
-**Execution Flow**:
-1. API automatically sets `ScriptHash` on webhook if script exists for `config_id`
-2. Worker checks `webhook.ScriptHash` before delivery
-3. If present and `HOWK_LUA_ENABLED=true`: execute script to transform payload/headers
-4. If disabled but `ScriptHash` set: send to DLQ (prevents data leaks)
+### Script Modules
 
-**Script Modules**:
-- **kv**: Redis-backed storage with namespace isolation (`lua:kv:{config_id}:{key}`)
-  - `kv.get(key)`, `kv.set(key, value, ttl_secs)`, `kv.del(key)`
-- **http**: HTTP GET with allowlist and singleflight deduplication
-  - `http.get(url, headers_table)` returns `{status, body, headers}`
-- **crypto**: RSA-OAEP + AES-GCM credential decryption
-  - `crypto.decrypt_credential(key_name, symmetric_key_b64, encrypted_data_b64)`
+- **kv**: Redis-backed storage (`kv.get()`, `kv.set()`, `kv.del()`)
+- **http**: HTTP GET with allowlist (`http.get(url, headers)`)
+- **crypto**: RSA-OAEP + AES-GCM decryption (`crypto.decrypt_credential()`)
+- **base64**: Base64 encoding/decoding
+- **json**: JSON encode/decode
 
-**Script Input/Output**:
+### Script Input/Output
+
 ```lua
--- Input (read-only globals)
+-- Input globals (read-only)
 payload           -- string: raw JSON payload
 headers           -- table: HTTP headers
 metadata          -- table: {attempt, config_id, webhook_id, created_at}
 previous_error    -- table|nil: {status_code, error, attempt} on retries
 
--- Output (write)
-request.body      -- string: override outgoing payload (can be binary)
+-- Output (write to these)
+request.body      -- string: override outgoing payload
 request.headers   -- table: additional/override headers
 config.opt_out_default_headers  -- bool: skip X-Webhook-* headers
 ```
 
-**Security**:
-- Sandboxed (no `io`, `os`, `debug`, `package` modules)
+### Security Constraints
+
+- Sandboxed (no `io`, `os`, `debug` modules)
 - CPU timeout: 500ms (default)
 - Memory limit: 50MB per execution
 - HTTP module enforces hostname allowlist
 
-**Feature Flag**: `HOWK_LUA_ENABLED` (default: false)
-- Must be explicitly enabled for script execution
-- If disabled but webhook has `ScriptHash`: → DLQ with reason `script_disabled`
+## Code Style Guidelines
 
-## Key Domain Types
+### Package Structure
+- Each package has a clear, single responsibility
+- Domain types in `internal/domain/`
+- Interfaces defined at consumer, implemented at provider
+- Test utilities in `internal/testutil/`
 
-### Webhook
-- `ID`: ULID-based unique identifier
-- `ConfigID`: config identifier -> implicit tenant
-- `Endpoint`: Target URL
-- `EndpointHash`: SHA256 hash of endpoint (for circuit breaker keys)
-- `Payload`: JSON payload to deliver
-- `Attempt`: Current attempt number (1-indexed)
-- `MaxAttempts`: Maximum retry attempts (default 20)
-- `ScheduledAt`: When this delivery should be attempted
-- `ScriptHash`: SHA256 of lua_code (indicates transformation expected)
+### Naming Conventions
+- Go standard naming: `PascalCase` for exported, `camelCase` for unexported
+- Test files: `*_test.go` for unit tests, `*_integration_test.go` for integration
+- Build tags: `//go:build integration` for integration tests
 
-### DeliveryResult
-- `Success`: Whether delivery succeeded (2xx status)
-- `StatusCode`: HTTP status code
-- `ShouldRetry`: Whether to schedule retry
-- `NextRetryAt`: When to retry (if applicable)
-- `Webhook`: Original webhook (for retry scheduling)
+### Error Handling
+- Use `fmt.Errorf()` with `%w` verb for error wrapping
+- Structured logging with `zerolog`
+- Return errors, don't log and swallow
 
-### CircuitBreaker States
-- `CircuitClosed`: Normal operation
-- `CircuitOpen`: Endpoint is down
-- `CircuitHalfOpen`: Probing for recovery
+### Logging
+- Use `log.Info()`, `log.Error()`, etc. from `zerolog`
+- Structured fields: `log.Info().Str("webhook_id", id).Msg("delivered")`
+- Console output in development (configured in `main.go`)
 
-## Configuration
+## Testing Guidelines
 
-Configuration is loaded via `config.LoadConfig()` with support for multiple sources, prioritized in this order:
+### Unit Tests
+- Use `miniredis` for Redis mocking
+- No external dependencies
+- Fast execution (< 5 seconds total)
 
-1. **Environment variables** (highest priority) - HOWK_ prefixed
-2. **Config file** (YAML format) - `config.yaml` or specified via `--config` flag
-3. **Defaults** (lowest priority) - built-in sensible defaults
+```go
+func TestSomething(t *testing.T) {
+    // Use miniredis
+    s := miniredis.RunT(&t)
+    defer s.Close()
 
-### Configuration Loading
-
-All HOWK components support the `--config` flag to specify a config file path:
-
-```bash
-bin/howk-api --config=/etc/howk/config.yaml
-bin/howk-worker --config=config.yaml
-bin/howk-scheduler --config=/path/to/config.yaml
-bin/howk-reconciler --config=config.yaml --from-beginning
+    // Test logic
+}
 ```
 
-If no config file is specified, HOWK searches in these locations:
-- Current directory (`.`)
-- Home directory (`~/.howk/`)
-- System config directory (`/etc/howk/`)
+### Integration Tests
+- Marked with `//go:build integration`
+- Require Docker infrastructure (`make infra`)
+- Use real Redis and Kafka
+- Clean up after tests
 
-### Environment Variables
+```go
+//go:build integration
 
-All configuration can be overridden via environment variables with the `HOWK_` prefix, using nested structure with underscores. Examples:
+func TestIntegration(t *testing.T) {
+    // Use real Redis/Kafka
+    rdb := testutil.NewTestRedis(t)
+    brokers := testutil.GetKafkaBrokers()
 
-- `HOWK_API_PORT=9090` - Override API port
-- `HOWK_KAFKA_BROKERS=kafka1:9092,kafka2:9092` - Override Kafka brokers
-- `HOWK_REDIS_ADDR=redis.example.com:6379` - Override Redis address
-- `HOWK_REDIS_PASSWORD=secret` - Set Redis password
-- `HOWK_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3` - Override circuit breaker threshold
-- `HOWK_TTL_STATUS_TTL=72h` - Override webhook status TTL
-
-See `.env.example` for a complete list of supported environment variables.
-
-### Configuration File Format
-
-Configuration files use YAML format. See `config.example.yaml` for a complete example:
-
-```yaml
-api:
-  port: 8080
-  read_timeout: 10s
-  write_timeout: 10s
-
-kafka:
-  brokers:
-    - localhost:19092
-  topics:
-    pending: howk.pending
-    results: howk.results
-    deadletter: howk.deadletter
-  consumer_group: howk-workers
-
-redis:
-  addr: localhost:6379
-  password: ""
-  pool_size: 100
-
-delivery:
-  timeout: 30s
-  max_idle_conns: 100
-
-retry:
-  base_delay: 10s
-  max_delay: 24h
-  max_attempts: 20
-
-circuit_breaker:
-  failure_threshold: 5
-  recovery_timeout: 5m
-
-scheduler:
-  poll_interval: 1s
-  batch_size: 500
-
-ttl:
-  circuit_state_ttl: 24h
-  status_ttl: 168h
-  stats_ttl: 48h
-  idempotency_ttl: 24h
+    // Test logic
+}
 ```
 
-### Default Values
+### Test Helpers
 
-Key settings with defaults:
+```go
+// Create test webhook
+wh := testutil.NewTestWebhook("https://example.com/webhook")
+wh := testutil.NewTestWebhookWithOpts(testutil.WebhookOpts{
+    Endpoint: "https://api.example.com/webhook",
+    ConfigID: "tenant-123",
+})
 
-- **Kafka**: Brokers (`localhost:9092`), consumer group (`howk-workers`), topics, retention (7 days), compression (snappy)
-- **Redis**: Address (`localhost:6379`), pool size (100), timeouts (3-5 seconds)
-- **API**: Port (8080), timeouts (10s), max request size (1MB)
-- **Delivery**: HTTP timeout (30s), connection pooling (100 max idle)
-- **Retry**: Base delay (10s), max delay (24h), max attempts (20), jitter (0.2)
-- **Circuit Breaker**: Failure threshold (5), recovery timeout (5m), success threshold (2)
-- **TTL**: Circuit state (24h), webhook status (7 days), stats (48h), idempotency (24h)
+// Wait for condition
+testutil.WaitFor(t, 5*time.Second, func() bool {
+    return someCondition()
+})
+```
 
-## Recovery Scenarios
+## Security Considerations
+
+### Webhook Signing
+- Support for HMAC-SHA256 webhook signatures
+- Signing secret per webhook configuration
+- Header: `X-Webhook-Signature`
+
+### Lua Script Security
+- Sandboxed execution environment
+- No filesystem or network access (except HTTP module with allowlist)
+- CPU and memory limits enforced
+- Disabled by default
+
+### Circuit Breaker Protection
+- Prevents overwhelming failing endpoints
+- Per-endpoint isolation via endpoint hash
+- Automatic recovery with probe requests
+
+## Recovery Procedures
 
 ### Redis Dies
 
-1. Redis comes back empty
-2. Run reconciler: `go run ./cmd/reconciler --from-beginning`
-3. Reconciler replays `howk.pending` and `howk.results` topics
-4. Rebuilds: circuit breaker states, retry queue, status hashes, stats
-5. Normal operation resumes
+```bash
+# 1. Redis comes back (empty or from backup)
+# 2. Run reconciler to rebuild state
+go run ./cmd/reconciler --from-beginning
+# 3. Normal operation resumes
+```
 
-During rebuild, workers keep delivering (Kafka is the queue). Status queries may return stale data.
+Reconciler replays `howk.pending` and `howk.results` topics to rebuild:
+- Circuit breaker states
+- Retry queue
+- Status hashes
+- Statistics
 
-## Testing Strategy
+### Kafka Issues
+- Kafka handles broker failures internally via replication
+- No manual intervention needed (unless all replicas lost)
+- Consumer groups rebalance automatically
 
-- Unit tests for retry strategy, circuit breaker logic, domain helpers
-- Integration tests require infrastructure (use `make infra` first)
-- Manual testing: `make test-enqueue` sends webhook to echo server at `localhost:8090`
+## CI/CD
 
-## Important Patterns
+GitHub Actions workflow in `.github/workflows/test.yml`:
+- Runs on push to `main` and PRs
+- Starts Redis and Redpanda services
+- Runs unit and integration tests with race detector
+- Uploads coverage to Codecov
 
-### Idempotency
-- Webhooks can have an `idempotency_key` to prevent duplicates (application-level)
-- System guarantees **at-least-once delivery** - receivers must handle duplicates
+## Manual Testing
 
-### Error Handling
-- Retryable: 5xx, 408, 429
-- Non-retryable: 4xx (except 408, 429)
-- Circuit opens on consecutive failures in window, not just count
+```bash
+# Start infrastructure
+make infra
 
-### Structured Logging
-- Uses `zerolog` for structured logging
-- Log level: Info (default), configurable via code
-- Console output in development
+# Run API
+make run-api
 
-### Graceful Shutdown
-- All components listen for SIGINT/SIGTERM
-- Context cancellation propagates through all goroutines
-- Kafka consumers commit offsets before shutdown
+# Enqueue test webhook (in another terminal)
+make test-enqueue
+
+# Check webhook status
+make test-status ID=wh_xxx
+
+# View system stats
+make test-stats
+```
+
+## Key Files for Common Tasks
+
+| Task | File(s) |
+|------|---------|
+| Add new config option | `internal/config/config.go` |
+| Add new domain type | `internal/domain/types.go` |
+| Modify retry logic | `internal/retry/strategy.go` |
+| Modify circuit breaker | `internal/circuit/breaker.go` |
+| Add Lua module | `internal/script/modules/*.go` |
+| Add HTTP handler | `internal/api/h_*.go` |
+| Add integration test | `internal/{pkg}/*_integration_test.go` |
+
+## Common Gotchas
+
+1. **Redis port**: Docker Redis runs on port 6380, not 6379 (to avoid conflicts)
+2. **Redpanda upgrade**: Use `make infra-clean` when upgrading Redpanda versions
+3. **Lua disabled**: Scripts are disabled by default, must set `HOWK_LUA_ENABLED=true`
+4. **Consumer groups**: Tests use unique consumer groups to avoid cross-test interference
+5. **Test isolation**: Always clean up Redis keys in integration tests
