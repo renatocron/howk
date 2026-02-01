@@ -23,6 +23,7 @@ import (
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/retry"
+	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/testutil"
 	"github.com/howk/howk/internal/worker"
 )
@@ -42,8 +43,9 @@ func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker,
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
+	se := script.NewEngine(cfg.Lua, script.NewLoader())
 
-	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs)
+	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -196,8 +198,9 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
+	se := script.NewEngine(cfg.Lua, script.NewLoader())
 
-	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs)
+	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -330,8 +333,9 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
+	se := script.NewEngine(cfg.Lua, script.NewLoader())
 
-	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs)
+	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
