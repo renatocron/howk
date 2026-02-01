@@ -17,6 +17,7 @@ import (
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/retry"
 	"github.com/howk/howk/internal/script"
+	"github.com/howk/howk/internal/script/modules"
 	"github.com/howk/howk/internal/worker"
 )
 
@@ -70,9 +71,21 @@ func main() {
 	// Initialize retry strategy
 	rs := retry.NewStrategy(cfg.Retry)
 
-	// Initialize script engine
+	// Initialize crypto module (loads keys from HOWK_LUA_CRYPTO_* env vars)
+	var cryptoModule *modules.CryptoModule
+	if cfg.Lua.Enabled {
+		cryptoModule, err = modules.NewCryptoModule()
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to load crypto module")
+		}
+		if cryptoModule.KeyCount() > 0 {
+			log.Info().Int("key_count", cryptoModule.KeyCount()).Msg("Crypto module loaded")
+		}
+	}
+
+	// Initialize script engine (pass Redis client for KV module and crypto module)
 	scriptLoader := script.NewLoader()
-	scriptEngine := script.NewEngine(cfg.Lua, scriptLoader)
+	scriptEngine := script.NewEngine(cfg.Lua, scriptLoader, cryptoModule, hs.Client())
 	defer scriptEngine.Close()
 
 	// Create worker

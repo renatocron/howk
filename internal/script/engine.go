@@ -13,20 +13,25 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/script/modules"
+	"github.com/redis/go-redis/v9"
 )
 
 // Engine executes Lua scripts in a sandboxed environment with pooling
 type Engine struct {
-	config config.LuaConfig
-	pool   *sync.Pool
-	loader *Loader
+	config  config.LuaConfig
+	pool    *sync.Pool
+	loader  *Loader
+	crypto  *modules.CryptoModule
+	rdb     *redis.Client
 }
 
-// NewEngine creates a new Lua script engine
-func NewEngine(cfg config.LuaConfig, loader *Loader) *Engine {
+// NewEngine creates a new Lua script engine with optional crypto and redis modules
+func NewEngine(cfg config.LuaConfig, loader *Loader, crypto *modules.CryptoModule, rdb *redis.Client) *Engine {
 	engine := &Engine{
 		config: cfg,
 		loader: loader,
+		crypto: crypto,
+		rdb:    rdb,
 	}
 
 	// Initialize state pool
@@ -80,10 +85,22 @@ func (e *Engine) newLuaState() *lua.LState {
 	preloadTable.RawSetString("debug", lua.LNil)
 
 	// Load built-in modules
-	luajson.Preload(L)     // JSON encode/decode
-	modules.LoadBase64(L)  // Base64 encode/decode
+	luajson.Preload(L)    // JSON encode/decode
+	modules.LoadBase64(L) // Base64 encode/decode
+
+	// Load crypto module if available
+	if e.crypto != nil {
+		e.crypto.LoadCrypto(L)
+	}
 
 	return L
+}
+
+// loadKVModule loads the KV module for a specific webhook (needs config_id)
+func (e *Engine) loadKVModule(L *lua.LState, configID string) {
+	if e.rdb != nil {
+		modules.LoadKV(L, e.rdb, configID)
+	}
 }
 
 // Execute runs a Lua script to transform a webhook
@@ -121,6 +138,9 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 			L.SetTop(0)
 			e.pool.Put(L)
 		}()
+
+		// Load KV module for this specific config_id
+		e.loadKVModule(L, string(webhook.ConfigID))
 
 		// Pass the timeout context to the script executor
 		result, err := e.executeScript(timeoutCtx, L, scriptConfig.LuaCode, webhook)
@@ -315,4 +335,9 @@ func (e *Engine) Close() error {
 // GetLoader returns the script loader (for loading scripts from Redis)
 func (e *Engine) GetLoader() *Loader {
 	return e.loader
+}
+
+// GetCrypto returns the crypto module (for testing)
+func (e *Engine) GetCrypto() *modules.CryptoModule {
+	return e.crypto
 }

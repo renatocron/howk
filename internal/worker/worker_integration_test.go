@@ -43,7 +43,7 @@ func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker,
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader())
+	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil)
 
 	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 
@@ -198,7 +198,7 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader())
+	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil)
 
 	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 
@@ -333,7 +333,7 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader())
+	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil)
 
 	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
 

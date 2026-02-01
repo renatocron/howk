@@ -302,7 +302,7 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 
 	// Create a test script engine with disabled config (scripts won't execute)
 	testScriptLoader := script.NewLoader()
-	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader)
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil)
 
 	w := worker.NewWorker(
 		cfg,
@@ -330,7 +330,7 @@ func TestNewWorker(t *testing.T) {
 
 	// Create a test script engine with disabled config
 	testScriptLoader := script.NewLoader()
-	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader)
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil)
 
 	w := worker.NewWorker(
 		cfg,

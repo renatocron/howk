@@ -202,7 +202,7 @@ func (s *Server) handleTestScript(c *gin.Context) {
 		Enabled:       true,
 		Timeout:       500 * time.Millisecond,
 		MemoryLimitMB: 50,
-	}, tempLoader)
+	}, tempLoader, nil, nil)
 	defer testEngine.Close()
 
 	// Execute script
