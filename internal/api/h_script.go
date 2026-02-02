@@ -152,7 +152,7 @@ func (s *Server) handleDeleteScript(c *gin.Context) {
 		// Continue - Kafka is source of truth
 	}
 
-	c.Status(http.StatusNoContent)
+	c.Writer.WriteHeader(http.StatusNoContent)
 }
 
 // handleTestScript handles POST /config/:config_id/script/test

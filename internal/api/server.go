@@ -22,10 +22,10 @@ import (
 // Server is the HTTP API server
 type Server struct {
 	config          config.APIConfig
-	publisher       *broker.KafkaWebhookPublisher
-	hotstate        *hotstate.RedisHotState
-	scriptValidator *script.Validator
-	scriptPublisher *script.Publisher
+	publisher       broker.WebhookPublisher
+	hotstate        hotstate.HotState
+	scriptValidator script.ValidatorInterface
+	scriptPublisher script.PublisherInterface
 	router          *gin.Engine
 	logger          zerolog.Logger
 }
@@ -33,10 +33,10 @@ type Server struct {
 // NewServer creates a new API server
 func NewServer(
 	cfg config.APIConfig,
-	pub *broker.KafkaWebhookPublisher,
-	hs *hotstate.RedisHotState,
-	scriptValidator *script.Validator,
-	scriptPublisher *script.Publisher,
+	pub broker.WebhookPublisher,
+	hs hotstate.HotState,
+	scriptValidator script.ValidatorInterface,
+	scriptPublisher script.PublisherInterface,
 ) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
