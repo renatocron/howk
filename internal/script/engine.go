@@ -59,11 +59,24 @@ func NewEngine(cfg config.LuaConfig, loader *Loader, crypto *modules.CryptoModul
 	return engine
 }
 
-// newLuaState creates a new sandboxed Lua state
+// newLuaState creates a new sandboxed Lua state with resource limits
 func (e *Engine) newLuaState() *lua.LState {
-	L := lua.NewState(lua.Options{
+	// Configure options with resource limits if configured
+	opts := lua.Options{
 		SkipOpenLibs: true, // We'll open only safe libraries
-	})
+	}
+	
+	// Set registry limits based on memory limit (approximate)
+	// Each registry entry is roughly a pointer size, so we estimate
+	if e.config.MemoryLimitMB > 0 {
+		// Approximate: 1MB ~ 131072 entries (assuming 8 bytes per entry)
+		// This is a rough approximation - actual memory usage depends on data stored
+		maxEntries := e.config.MemoryLimitMB * 131072
+		opts.RegistrySize = maxEntries
+		opts.RegistryMaxSize = maxEntries
+	}
+
+	L := lua.NewState(opts)
 
 	// Open safe standard libraries
 	for _, pair := range []struct {
@@ -248,6 +261,18 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, luaCode strin
 		if ctx.Err() != nil {
 			return nil, ctx.Err() // Return context error directly
 		}
+		
+		// Check for memory limit errors
+		// Only check when memory limit is actually configured
+		errStr := err.Error()
+		if e.config.MemoryLimitMB > 0 && containsSubstring(errStr, "registry overflow") {
+			return nil, &ScriptError{
+				Type:    ScriptErrorMemoryLimit,
+				Message: fmt.Sprintf("Script exceeded memory limit of %d MB", e.config.MemoryLimitMB),
+				Cause:   err,
+			}
+		}
+		
 		return nil, &ScriptError{
 			Type:    ScriptErrorRuntime,
 			Message: "Lua runtime error",
@@ -259,9 +284,24 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, luaCode strin
 	return e.extractTransformation(L), nil
 }
 
+// containsSubstring checks if a string contains a substring
+func containsSubstring(s, substr string) bool {
+	if len(substr) > len(s) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 // injectInputGlobals sets up the input globals for the script
 func (e *Engine) injectInputGlobals(L *lua.LState, webhook *domain.Webhook) error {
 	// payload - raw JSON payload as string
+	// Use lua.LString which can hold arbitrary binary data
+	// Go strings can contain any byte sequence, and lua.LString preserves this
 	L.SetGlobal("payload", lua.LString(string(webhook.Payload)))
 
 	// headers - table of HTTP headers
@@ -341,6 +381,9 @@ func (e *Engine) applyTransformation(webhook *domain.Webhook, result *TransformR
 
 	// Apply body transformation if provided
 	if result.Body != "" {
+		// Handle binary data correctly by converting string to RawMessage
+		// This preserves binary content without JSON re-encoding
+		// Go strings can hold arbitrary bytes, so this conversion is safe
 		transformed.Payload = json.RawMessage(result.Body)
 	}
 

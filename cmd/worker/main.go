@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -107,6 +108,30 @@ func main() {
 	// Create worker
 	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, cb, dc, rs, scriptEngine)
 
+	// Initialize and start script consumer if Lua is enabled
+	// This ensures the worker has scripts even if Redis is flushed
+	if cfg.Lua.Enabled {
+		scriptConsumer := script.NewScriptConsumer(
+			kafkaBroker,
+			scriptLoader,
+			hs,
+			cfg.Kafka.Topics.Scripts,
+			cfg.Kafka.ConsumerGroup+"-scripts", // Separate consumer group for scripts
+			24*time.Hour,                      // Script cache TTL
+		)
+		w.SetScriptConsumer(scriptConsumer)
+
+		// Start script consumer in background
+		if err := scriptConsumer.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("Failed to start script consumer, continuing with lazy loading only")
+		} else {
+			log.Info().
+				Str("topic", cfg.Kafka.Topics.Scripts).
+				Str("consumer_group", cfg.Kafka.ConsumerGroup+"-scripts").
+				Msg("Script consumer started - scripts will be synchronized from Kafka")
+		}
+	}
+
 	// Run worker
 	go func() {
 		if err := w.Run(ctx); err != nil {
@@ -119,4 +144,11 @@ func main() {
 	<-sigCh
 	log.Info().Msg("Shutdown signal received")
 	cancel()
+
+	// Stop script consumer gracefully
+	if w.GetScriptConsumer() != nil {
+		if err := w.GetScriptConsumer().Stop(); err != nil {
+			log.Warn().Err(err).Msg("Error stopping script consumer")
+		}
+	}
 }

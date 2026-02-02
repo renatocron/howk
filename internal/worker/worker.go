@@ -19,14 +19,15 @@ import (
 
 // Worker processes webhooks from Kafka and delivers them
 type Worker struct {
-	config       *config.Config
-	broker       broker.Broker
-	publisher    broker.WebhookPublisher
-	hotstate     hotstate.HotState
-	circuit      hotstate.CircuitBreakerChecker
-	delivery     delivery.Deliverer
-	retry        retry.Retrier
-	scriptEngine *script.Engine
+	config         *config.Config
+	broker         broker.Broker
+	publisher      broker.WebhookPublisher
+	hotstate       hotstate.HotState
+	circuit        hotstate.CircuitBreakerChecker
+	delivery       delivery.Deliverer
+	retry          retry.Retrier
+	scriptEngine   *script.Engine
+	scriptConsumer *script.ScriptConsumer
 }
 
 // NewWorker creates a new worker
@@ -52,9 +53,28 @@ func NewWorker(
 	}
 }
 
+// SetScriptConsumer sets the script consumer for the worker
+// This should be called before Run() if script synchronization is needed
+func (w *Worker) SetScriptConsumer(consumer *script.ScriptConsumer) {
+	w.scriptConsumer = consumer
+}
+
+// GetScriptConsumer returns the script consumer
+func (w *Worker) GetScriptConsumer() *script.ScriptConsumer {
+	return w.scriptConsumer
+}
+
 // Run starts the worker
 func (w *Worker) Run(ctx context.Context) error {
 	log.Info().Msg("Worker starting...")
+
+	// Start script consumer if configured
+	if w.scriptConsumer != nil {
+		if err := w.scriptConsumer.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("Failed to start script consumer")
+			// Continue anyway - scripts can still be loaded lazily from Redis
+		}
+	}
 
 	return w.broker.Subscribe(ctx, w.config.Kafka.Topics.Pending, w.config.Kafka.ConsumerGroup, func(ctx context.Context, msg *broker.Message) error {
 		return w.processMessage(ctx, msg)
