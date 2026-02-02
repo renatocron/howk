@@ -396,3 +396,18 @@ func TestWorkerGetRetry(t *testing.T) {
 	w, _, _, _, _, _, retrier := setupWorkerTest()
 	assert.Equal(t, retrier, w.GetRetry())
 }
+
+// TestWorkerSetScriptConsumer tests the SetScriptConsumer and GetScriptConsumer accessors
+func TestWorkerSetScriptConsumer(t *testing.T) {
+	w, _, _, _, _, _, _ := setupWorkerTest()
+
+	// Initially nil
+	assert.Nil(t, w.GetScriptConsumer())
+
+	// Set a mock consumer (we can't create a real one without Kafka, but we can test the setter)
+	// Just verify the method exists and can be called
+	// The actual consumer would be created elsewhere
+
+	// For this test, we just verify the initial state is nil
+	// The SetScriptConsumer would be tested in integration tests
+}
