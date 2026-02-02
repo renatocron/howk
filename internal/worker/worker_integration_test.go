@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/howk/howk/internal/broker"
-	"github.com/howk/howk/internal/circuit"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
@@ -41,12 +40,11 @@ func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker,
 	b := testutil.SetupKafka(t)
 
 	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
 	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
-	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
+	w := worker.NewWorker(cfg, b, pub, hs, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -196,12 +194,11 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	b := testutil.SetupKafka(t)
 
 	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
 	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
-	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
+	w := worker.NewWorker(cfg, b, pub, hs, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -246,7 +243,7 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	})
 
 	// Check circuit breaker state
-	circuitBreaker, err := cb.Get(ctx, webhook.EndpointHash)
+	circuitBreaker, err := hs.CircuitBreaker().Get(ctx, webhook.EndpointHash)
 	require.NoError(t, err)
 
 	// Circuit should be open after 3 failures
@@ -331,12 +328,11 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 	b := testutil.SetupKafka(t)
 
 	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 	dc := delivery.NewClient(cfg.Delivery)
 	rs := retry.NewStrategy(cfg.Retry)
 	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
-	w := worker.NewWorker(cfg, b, pub, hs, cb, dc, rs, se)
+	w := worker.NewWorker(cfg, b, pub, hs, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

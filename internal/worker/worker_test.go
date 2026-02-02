@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -15,9 +16,10 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
+	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/mocks"
 	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/worker"
-	"github.com/rs/zerolog"
 )
 
 // MockBroker implements broker.Broker
@@ -211,35 +213,12 @@ func (m *MockHotState) DeleteScript(ctx context.Context, configID domain.ConfigI
 	return args.Error(0)
 }
 
-// MockCircuitBreaker implements methods used by Worker from circuit.Breaker
-type MockCircuitBreaker struct {
-	mock.Mock
-}
-
-func (m *MockCircuitBreaker) ShouldAllow(ctx context.Context, endpointHash domain.EndpointHash) (bool, bool, error) {
-	args := m.Called(ctx, endpointHash)
-	return args.Bool(0), args.Bool(1), args.Error(2)
-}
-
-func (m *MockCircuitBreaker) RecordSuccess(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
-	args := m.Called(ctx, endpointHash)
+func (m *MockHotState) CircuitBreaker() hotstate.CircuitBreakerChecker {
+	args := m.Called()
 	if args.Get(0) == nil {
-		return nil, args.Error(1)
+		return nil
 	}
-	return args.Get(0).(*domain.CircuitBreaker), args.Error(1)
-}
-
-func (m *MockCircuitBreaker) RecordFailure(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
-	args := m.Called(ctx, endpointHash)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.CircuitBreaker), args.Error(1)
-}
-
-func (m *MockCircuitBreaker) GetDelayForState(state domain.CircuitState, baseDelay time.Duration) time.Duration {
-	args := m.Called(state, baseDelay)
-	return args.Get(0).(time.Duration)
+	return args.Get(0).(hotstate.CircuitBreakerChecker)
 }
 
 // MockDeliveryClient implements methods used by Worker from delivery.Client
@@ -291,15 +270,18 @@ func (m *MockRetryStrategy) RetrySchedule() []string {
 	return args.Get(0).([]string)
 }
 
-func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotState, *MockCircuitBreaker, *MockDeliveryClient, *MockRetryStrategy) {
+func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotState, *mocks.MockCircuitBreaker, *MockDeliveryClient, *MockRetryStrategy) {
 	cfg := config.DefaultConfig()
 
 	mockBroker := new(MockBroker)
 	mockPublisher := new(MockPublisher)
 	mockHotState := new(MockHotState)
-	mockCircuitBreaker := new(MockCircuitBreaker)
+	mockCircuitBreaker := new(mocks.MockCircuitBreaker)
 	mockDeliveryClient := new(MockDeliveryClient)
 	mockRetryStrategy := new(MockRetryStrategy)
+
+	// Set up the mock to return the circuit breaker
+	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
 
 	// Create a test script engine with disabled config (scripts won't execute)
 	testScriptLoader := script.NewLoader()
@@ -310,7 +292,6 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 		mockBroker,         // Passed as broker.Broker interface
 		mockPublisher,      // Passed as broker.WebhookPublisher interface
 		mockHotState,       // Passed as hotstate.HotState interface
-		mockCircuitBreaker, // Passed as hotstate.CircuitBreakerChecker interface
 		mockDeliveryClient, // Passed as delivery.Deliverer interface
 		mockRetryStrategy,  // Passed as retry.Retrier interface
 		testScriptEngine,   // Passed as *script.Engine
@@ -325,9 +306,12 @@ func TestNewWorker(t *testing.T) {
 	mockBroker := new(MockBroker)
 	mockPublisher := new(MockPublisher)
 	mockHotState := new(MockHotState)
-	mockCircuitBreaker := new(MockCircuitBreaker)
+	mockCircuitBreaker := new(mocks.MockCircuitBreaker)
 	mockDeliveryClient := new(MockDeliveryClient)
 	mockRetryStrategy := new(MockRetryStrategy)
+
+	// Set up the mock to return the circuit breaker
+	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
 
 	// Create a test script engine with disabled config
 	testScriptLoader := script.NewLoader()
@@ -338,7 +322,6 @@ func TestNewWorker(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockCircuitBreaker,
 		mockDeliveryClient,
 		mockRetryStrategy,
 		testScriptEngine,

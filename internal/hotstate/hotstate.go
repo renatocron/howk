@@ -32,11 +32,9 @@ type HotState interface {
 	// DeleteRetryData deletes the compressed webhook data (called on terminal state)
 	DeleteRetryData(ctx context.Context, webhookID domain.WebhookID) error
 
-	// Circuit breaker
-	GetCircuit(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error)
-	UpdateCircuit(ctx context.Context, cb *domain.CircuitBreaker) error
-	RecordSuccess(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error)
-	RecordFailure(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error)
+	// Circuit breaker operations
+	// CircuitBreaker returns the circuit breaker checker for this hot state
+	CircuitBreaker() CircuitBreakerChecker
 
 	// Stats
 	IncrStats(ctx context.Context, bucket string, counters map[string]int64) error
@@ -60,8 +58,11 @@ type HotState interface {
 	Client() *redis.Client
 }
 
-// CircuitBreakerChecker is a subset of HotState for circuit checking
+// CircuitBreakerChecker provides circuit breaker functionality
 type CircuitBreakerChecker interface {
+	// Get retrieves the current circuit state for an endpoint
+	Get(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error)
+
 	// ShouldAllow checks if a request should be allowed through
 	// Returns: allowed, isProbe, error
 	ShouldAllow(ctx context.Context, endpointHash domain.EndpointHash) (bool, bool, error)

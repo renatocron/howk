@@ -10,6 +10,7 @@ import (
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
+	"github.com/howk/howk/internal/hotstate"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -69,33 +70,12 @@ func (m *MockHotState) DeleteRetryData(ctx context.Context, webhookID domain.Web
 	return args.Error(0)
 }
 
-func (m *MockHotState) GetCircuit(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
-	args := m.Called(ctx, endpointHash)
+func (m *MockHotState) CircuitBreaker() hotstate.CircuitBreakerChecker {
+	args := m.Called()
 	if args.Get(0) == nil {
-		return nil, args.Error(1)
+		return nil
 	}
-	return args.Get(0).(*domain.CircuitBreaker), args.Error(1)
-}
-
-func (m *MockHotState) UpdateCircuit(ctx context.Context, cb *domain.CircuitBreaker) error {
-	args := m.Called(ctx, cb)
-	return args.Error(0)
-}
-
-func (m *MockHotState) RecordSuccess(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
-	args := m.Called(ctx, endpointHash)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.CircuitBreaker), args.Error(1)
-}
-
-func (m *MockHotState) RecordFailure(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
-	args := m.Called(ctx, endpointHash)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.CircuitBreaker), args.Error(1)
+	return args.Get(0).(hotstate.CircuitBreakerChecker)
 }
 
 func (m *MockHotState) IncrStats(ctx context.Context, bucket string, counters map[string]int64) error {

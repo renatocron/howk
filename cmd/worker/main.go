@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
-	"github.com/howk/howk/internal/circuit"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/hotstate"
@@ -55,15 +54,12 @@ func main() {
 	// Initialize Kafka publisher
 	publisher := broker.NewKafkaWebhookPublisher(kafkaBroker, cfg.Kafka.Topics)
 
-	// Initialize Redis hot state
+	// Initialize Redis hot state (includes circuit breaker)
 	hs, err := hotstate.NewRedisHotState(cfg.Redis, cfg.CircuitBreaker, cfg.TTL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Redis hot state")
 	}
 	defer hs.Close()
-
-	// Initialize circuit breaker
-	cb := circuit.NewBreaker(hs.Client(), cfg.CircuitBreaker, cfg.TTL)
 
 	// Initialize delivery client
 	dc := delivery.NewClient(cfg.Delivery)
@@ -106,7 +102,7 @@ func main() {
 	defer scriptEngine.Close()
 
 	// Create worker
-	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, cb, dc, rs, scriptEngine)
+	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, dc, rs, scriptEngine)
 
 	// Initialize and start script consumer if Lua is enabled
 	// This ensures the worker has scripts even if Redis is flushed

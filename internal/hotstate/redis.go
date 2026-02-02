@@ -62,17 +62,29 @@ func NewRedisHotState(cfg config.RedisConfig, cbConfig config.CircuitBreakerConf
 	}, nil
 }
 
-func (r *RedisHotState) circuitKey(endpointHash domain.EndpointHash) string {
+// circuitBreaker implements CircuitBreakerChecker interface
+type circuitBreaker struct {
+	rdb       *redis.Client
+	config    config.CircuitBreakerConfig
+	ttlConfig config.TTLConfig
+}
+
+func (r *RedisHotState) CircuitBreaker() CircuitBreakerChecker {
+	return &circuitBreaker{
+		rdb:       r.rdb,
+		config:    r.circuitConfig,
+		ttlConfig: r.ttlConfig,
+	}
+}
+
+func (c *circuitBreaker) circuitKey(endpointHash domain.EndpointHash) string {
 	return circuitStatePrefix + string(endpointHash)
 }
 
-// --- Circuit Breaker Operations ---
-
-func (r *RedisHotState) GetCircuit(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
-	key := r.circuitKey(endpointHash)
-	data, err := r.rdb.Get(ctx, key).Bytes()
+// Get retrieves the current circuit state
+func (c *circuitBreaker) Get(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
+	data, err := c.rdb.Get(ctx, c.circuitKey(endpointHash)).Bytes()
 	if err == redis.Nil {
-		// No circuit state = closed by default
 		return &domain.CircuitBreaker{
 			EndpointHash:   endpointHash,
 			State:          domain.CircuitClosed,
@@ -92,29 +104,146 @@ func (r *RedisHotState) GetCircuit(ctx context.Context, endpointHash domain.Endp
 	return &cb, nil
 }
 
-func (r *RedisHotState) UpdateCircuit(ctx context.Context, cb *domain.CircuitBreaker) error {
-	data, err := json.Marshal(cb)
+// getWithTx retrieves circuit state within a transaction
+func (c *circuitBreaker) getWithTx(ctx context.Context, tx *redis.Tx, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
+	data, err := tx.Get(ctx, c.circuitKey(endpointHash)).Bytes()
+	if err == redis.Nil {
+		return &domain.CircuitBreaker{
+			EndpointHash:   endpointHash,
+			State:          domain.CircuitClosed,
+			Failures:       0,
+			StateChangedAt: time.Now(),
+		}, nil
+	}
 	if err != nil {
-		return fmt.Errorf("marshal circuit: %w", err)
+		return nil, err
 	}
 
-	ttl := r.ttlConfig.CircuitStateTTL
-	if cb.State == domain.CircuitClosed && cb.Failures == 0 {
-		ttl = 2 * r.circuitConfig.RecoveryTimeout
+	var cb domain.CircuitBreaker
+	if err := json.Unmarshal(data, &cb); err != nil {
+		return nil, err
 	}
-
-	return r.rdb.Set(ctx, r.circuitKey(cb.EndpointHash), data, ttl).Err()
+	return &cb, nil
 }
 
-func (r *RedisHotState) RecordSuccess(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
-	key := r.circuitKey(endpointHash)
+// save saves circuit state
+func (c *circuitBreaker) save(ctx context.Context, cb *domain.CircuitBreaker) error {
+	data, err := json.Marshal(cb)
+	if err != nil {
+		return err
+	}
+
+	ttl := c.ttlConfig.CircuitStateTTL
+	if cb.State == domain.CircuitClosed && cb.Failures == 0 {
+		ttl = 2 * c.config.RecoveryTimeout
+	}
+
+	return c.rdb.Set(ctx, c.circuitKey(cb.EndpointHash), data, ttl).Err()
+}
+
+// saveWithTx saves circuit state within a transaction
+func (c *circuitBreaker) saveWithTx(ctx context.Context, tx *redis.Tx, cb *domain.CircuitBreaker) error {
+	data, err := json.Marshal(cb)
+	if err != nil {
+		return err
+	}
+
+	ttl := c.ttlConfig.CircuitStateTTL
+	if cb.State == domain.CircuitClosed && cb.Failures == 0 {
+		ttl = 2 * c.config.RecoveryTimeout
+	}
+
+	_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		return pipe.Set(ctx, c.circuitKey(cb.EndpointHash), data, ttl).Err()
+	})
+	return err
+}
+
+// ShouldAllow checks if a request should be allowed through the circuit
+func (c *circuitBreaker) ShouldAllow(ctx context.Context, endpointHash domain.EndpointHash) (bool, bool, error) {
+	cb, err := c.Get(ctx, endpointHash)
+	if err != nil {
+		return true, false, err
+	}
+
+	now := time.Now()
+	key := c.circuitKey(endpointHash)
+
+	switch cb.State {
+	case domain.CircuitClosed:
+		return true, false, nil
+
+	case domain.CircuitOpen:
+		if now.After(cb.StateChangedAt.Add(c.config.RecoveryTimeout)) {
+			var transitioned bool
+			err := c.rdb.Watch(ctx, func(tx *redis.Tx) error {
+				currentCB, err := c.getWithTx(ctx, tx, endpointHash)
+				if err != nil {
+					return err
+				}
+
+				if currentCB.State != domain.CircuitOpen {
+					return nil
+				}
+
+				currentCB.State = domain.CircuitHalfOpen
+				currentCB.StateChangedAt = now
+				currentCB.Successes = 0
+				nextProbe := now.Add(c.config.ProbeInterval)
+				currentCB.NextProbeAt = &nextProbe
+
+				transitioned = true
+				return c.saveWithTx(ctx, tx, currentCB)
+			}, key)
+
+			if err != nil {
+				return false, false, err
+			}
+
+			if transitioned {
+				return true, true, nil
+			}
+		}
+		return false, false, nil
+
+	case domain.CircuitHalfOpen:
+		lockKey := fmt.Sprintf("probe_lock:%s", endpointHash)
+
+		if cb.NextProbeAt == nil || now.After(*cb.NextProbeAt) {
+			locked, err := c.rdb.SetNX(ctx, lockKey, "1", c.config.ProbeInterval).Result()
+			if err != nil {
+				return true, true, err
+			}
+
+			if !locked {
+				return false, false, nil
+			}
+
+			nextProbe := now.Add(c.config.ProbeInterval)
+			cb.NextProbeAt = &nextProbe
+			if err := c.save(ctx, cb); err != nil {
+				return true, true, err
+			}
+
+			return true, true, nil
+		}
+		return false, false, nil
+
+	default:
+		return true, false, nil
+	}
+}
+
+// RecordSuccess records a successful delivery
+func (c *circuitBreaker) RecordSuccess(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
+	key := c.circuitKey(endpointHash)
 	now := time.Now()
 
 	var cb *domain.CircuitBreaker
 
-	err := r.rdb.Watch(ctx, func(tx *redis.Tx) error {
+	err := c.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		var err error
-		cb, err = r.GetCircuit(ctx, endpointHash)
+		cb, err = c.getWithTx(ctx, tx, endpointHash)
 		if err != nil {
 			return err
 		}
@@ -126,7 +255,7 @@ func (r *RedisHotState) RecordSuccess(ctx context.Context, endpointHash domain.E
 			cb.Failures = 0
 		case domain.CircuitHalfOpen:
 			cb.Successes++
-			if cb.Successes >= r.circuitConfig.SuccessThreshold {
+			if cb.Successes >= c.config.SuccessThreshold {
 				cb.State = domain.CircuitClosed
 				cb.StateChangedAt = now
 				cb.Failures = 0
@@ -139,7 +268,7 @@ func (r *RedisHotState) RecordSuccess(ctx context.Context, endpointHash domain.E
 			cb.Successes = 1
 		}
 
-		return r.UpdateCircuit(ctx, cb)
+		return c.saveWithTx(ctx, tx, cb)
 	}, key)
 
 	if err != nil {
@@ -149,15 +278,16 @@ func (r *RedisHotState) RecordSuccess(ctx context.Context, endpointHash domain.E
 	return cb, nil
 }
 
-func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
-	key := r.circuitKey(endpointHash)
+// RecordFailure records a failed delivery
+func (c *circuitBreaker) RecordFailure(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error) {
+	key := c.circuitKey(endpointHash)
 	now := time.Now()
 
 	var cb *domain.CircuitBreaker
 
-	err := r.rdb.Watch(ctx, func(tx *redis.Tx) error {
+	err := c.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		var err error
-		cb, err = r.GetCircuit(ctx, endpointHash)
+		cb, err = c.getWithTx(ctx, tx, endpointHash)
 		if err != nil {
 			return err
 		}
@@ -165,7 +295,7 @@ func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.E
 		lastFailureAt := cb.LastFailureAt
 		cb.LastFailureAt = &now
 
-		windowStart := now.Add(-r.circuitConfig.FailureWindow)
+		windowStart := now.Add(-c.config.FailureWindow)
 		if lastFailureAt != nil && lastFailureAt.After(windowStart) {
 			cb.Failures++
 		} else {
@@ -174,7 +304,7 @@ func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.E
 
 		switch cb.State {
 		case domain.CircuitClosed:
-			if cb.Failures >= r.circuitConfig.FailureThreshold {
+			if cb.Failures >= c.config.FailureThreshold {
 				cb.State = domain.CircuitOpen
 				cb.StateChangedAt = now
 			}
@@ -187,7 +317,7 @@ func (r *RedisHotState) RecordFailure(ctx context.Context, endpointHash domain.E
 			// Already open
 		}
 
-		return r.UpdateCircuit(ctx, cb)
+		return c.saveWithTx(ctx, tx, cb)
 	}, key)
 
 	if err != nil {

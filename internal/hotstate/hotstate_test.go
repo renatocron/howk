@@ -44,24 +44,25 @@ func newMockedHotState(t *testing.T, cfg config.CircuitBreakerConfig) (*RedisHot
 	return hotState, mock
 }
 
-func TestRedisHotState_GetCircuit_NotFound(t *testing.T) {
+func TestCircuitBreaker_Get_NotFound(t *testing.T) {
 	ctx := context.Background()
 	endpoint := domain.EndpointHash("endpoint-hash")
 
 	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
 	mockClient.ExpectGet("circuit:endpoint-hash").RedisNil()
 
-	cb, err := state.GetCircuit(ctx, endpoint)
+	cb := state.CircuitBreaker()
+	result, err := cb.(*circuitBreaker).Get(ctx, endpoint)
 	require.NoError(t, err)
-	require.NotNil(t, cb)
-	assert.Equal(t, domain.CircuitClosed, cb.State)
-	assert.Equal(t, endpoint, cb.EndpointHash)
-	assert.Equal(t, 0, cb.Failures)
+	require.NotNil(t, result)
+	assert.Equal(t, domain.CircuitClosed, result.State)
+	assert.Equal(t, endpoint, result.EndpointHash)
+	assert.Equal(t, 0, result.Failures)
 
 	require.NoError(t, mockClient.ExpectationsWereMet())
 }
 
-func TestRedisHotState_GetCircuit_Found(t *testing.T) {
+func TestCircuitBreaker_Get_Found(t *testing.T) {
 	ctx := context.Background()
 	endpoint := domain.EndpointHash("endpoint-hash")
 	existing := domain.CircuitBreaker{
@@ -78,18 +79,19 @@ func TestRedisHotState_GetCircuit_Found(t *testing.T) {
 	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
 	mockClient.ExpectGet("circuit:endpoint-hash").SetVal(string(payload))
 
-	cb, getErr := state.GetCircuit(ctx, endpoint)
+	cb := state.CircuitBreaker()
+	result, getErr := cb.(*circuitBreaker).Get(ctx, endpoint)
 	require.NoError(t, getErr)
-	require.NotNil(t, cb)
-	assert.Equal(t, existing.EndpointHash, cb.EndpointHash)
-	assert.Equal(t, existing.State, cb.State)
-	assert.Equal(t, existing.Failures, cb.Failures)
-	assert.Equal(t, existing.Successes, cb.Successes)
+	require.NotNil(t, result)
+	assert.Equal(t, existing.EndpointHash, result.EndpointHash)
+	assert.Equal(t, existing.State, result.State)
+	assert.Equal(t, existing.Failures, result.Failures)
+	assert.Equal(t, existing.Successes, result.Successes)
 
 	require.NoError(t, mockClient.ExpectationsWereMet())
 }
 
-func TestRedisHotState_UpdateCircuit_ClosedStateTTL(t *testing.T) {
+func TestCircuitBreaker_Save_ClosedStateTTL(t *testing.T) {
 	ctx := context.Background()
 	endpoint := domain.EndpointHash("endpoint-hash")
 	cfg := defaultCircuitConfig
@@ -107,13 +109,14 @@ func TestRedisHotState_UpdateCircuit_ClosedStateTTL(t *testing.T) {
 	require.NoError(t, err)
 	mockClient.ExpectSet("circuit:endpoint-hash", payload, expectedTTL).SetVal("OK")
 
-	updateErr := state.UpdateCircuit(ctx, circuit)
-	require.NoError(t, updateErr)
+	cb := state.CircuitBreaker()
+	saveErr := cb.(*circuitBreaker).save(ctx, circuit)
+	require.NoError(t, saveErr)
 
 	require.NoError(t, mockClient.ExpectationsWereMet())
 }
 
-func TestRedisHotState_UpdateCircuit_OpenStateTTL(t *testing.T) {
+func TestCircuitBreaker_Save_OpenStateTTL(t *testing.T) {
 	ctx := context.Background()
 	endpoint := domain.EndpointHash("endpoint-hash")
 
@@ -128,8 +131,9 @@ func TestRedisHotState_UpdateCircuit_OpenStateTTL(t *testing.T) {
 	require.NoError(t, err)
 	mockClient.ExpectSet("circuit:endpoint-hash", payload, 24*time.Hour).SetVal("OK")
 
-	updateErr := state.UpdateCircuit(ctx, circuit)
-	require.NoError(t, updateErr)
+	cb := state.CircuitBreaker()
+	saveErr := cb.(*circuitBreaker).save(ctx, circuit)
+	require.NoError(t, saveErr)
 
 	require.NoError(t, mockClient.ExpectationsWereMet())
 }
