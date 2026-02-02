@@ -3,6 +3,7 @@ package script
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -197,4 +198,85 @@ func TestEngine_Execute_BinaryPayload_ImageData(t *testing.T) {
 	expectedSize := fmt.Sprintf("%d", len(pngLikeData))
 	assert.Equal(t, expectedSize, result.Headers["X-Payload-Size"],
 		"Payload size header should be correct")
+}
+
+// TestEngine_Execute_Base64ImageInJSON demonstrates the recommended pattern
+// for sending binary data through JSON-only APIs:
+// 1. Client encodes binary as base64 in JSON
+// 2. Lua script decodes base64 to binary
+// 3. Script sets appropriate Content-Type
+// 4. Script disables default webhook headers
+func TestEngine_Execute_Base64ImageInJSON(t *testing.T) {
+	cfg := config.LuaConfig{
+		Enabled: true,
+		Timeout: 1 * time.Second,
+	}
+
+	loader := NewLoader()
+	// This is a 1x1 transparent PNG image, base64 encoded
+	luaCode := `
+		local json = require("json")
+		local base64 = require("base64")
+		
+		-- Parse the JSON input
+		local data = json.decode(payload)
+		
+		-- Decode the base64 image data to binary
+		request.body = base64.decode(data.data)
+		
+		-- Set the appropriate content type for PNG
+		request.headers = {}
+		request.headers["Content-Type"] = "image/png"
+		
+		-- Disable default webhook headers since we're sending raw image
+		config.opt_out_default_headers = true
+	`
+	loader.SetScript(&ScriptConfig{
+		ConfigID: "image_processor",
+		LuaCode:  luaCode,
+		Hash:     "image_processor_v1",
+	})
+
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
+	defer engine.Close()
+
+	// 1x1 transparent PNG, base64 encoded
+	base64Image := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+	// JSON payload containing the base64-encoded image
+	jsonPayload := map[string]string{
+		"data": base64Image,
+	}
+	jsonBytes, _ := json.Marshal(jsonPayload)
+
+	webhook := &domain.Webhook{
+		ConfigID: "image_processor",
+		Payload:  json.RawMessage(jsonBytes),
+		Headers:  map[string]string{},
+	}
+
+	result, err := engine.Execute(context.Background(), webhook)
+	assert.NoError(t, err)
+
+	// Decode the expected PNG bytes
+	expectedPNG, err := base64.StdEncoding.DecodeString(base64Image)
+	assert.NoError(t, err)
+
+	// Verify the output is the decoded binary PNG data
+	assert.True(t, bytes.Equal(expectedPNG, []byte(result.Payload)),
+		"Output should be decoded binary PNG data, not base64")
+
+	// Verify Content-Type header was set
+	assert.Equal(t, "image/png", result.Headers["Content-Type"],
+		"Content-Type header should be set to image/png")
+
+	// Note: OptOutDefaultHeaders is captured in TransformResult and handled
+	// by the delivery client, not stored in the Webhook struct
+
+	// Verify the PNG magic number is present
+	assert.True(t, len(result.Payload) >= 8, "Output should have PNG header")
+	assert.Equal(t, byte(0x89), result.Payload[0], "PNG magic byte 0")
+	assert.Equal(t, byte(0x50), result.Payload[1], "PNG magic byte 1 (P)")
+	assert.Equal(t, byte(0x4E), result.Payload[2], "PNG magic byte 2 (N)")
+	assert.Equal(t, byte(0x47), result.Payload[3], "PNG magic byte 3 (G)")
 }

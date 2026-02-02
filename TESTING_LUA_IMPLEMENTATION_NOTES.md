@@ -182,17 +182,17 @@ kv.del("session_token")
   - Namespace-specific allowlists via `HOWK_LUA_ALLOW_HOSTNAME_{NAMESPACE}` (e.g., `HOWK_LUA_ALLOW_HOSTNAME_MUSIC=api.music.com,auth.music.com`)
   - Namespace is extracted from config_id (e.g., `music:10` → namespace `music`)
   - Host validation happens before every request
-  
+
 - **Performance - Singleflight Deduplication:**
   - Concurrent identical requests are automatically deduplicated
   - Uses `golang.org/x/sync/singleflight` for request coalescing
   - Only the first request hits the external server; others wait and share the result
-  
+
 - **Performance - Response Caching:**
   - Optional response caching with configurable TTL per request
   - Cache key includes URL, headers, and method for accurate invalidation
   - Lua option: `http.get(url, headers, {cache_ttl = 300})` for 5-minute cache
-  
+
 - **Lua Method:**
   - `http.get(url, headers_table, options_table)`
   - Returns: `{status_code, body, headers}` table or `(nil, error)`
@@ -266,7 +266,7 @@ log.error("Request failed", {status = resp.status_code, body = resp.body})
 
 **Implementation Details:**
 - **Key Loading**: Loads private keys from environment variables at boot time
-  - Pattern: `HOWK_LUA_CRYPTO_{SUFFIX}` 
+  - Pattern: `HOWK_LUA_CRYPTO_{SUFFIX}`
   - Example: `HOWK_LUA_CRYPTO_PRIMARY` → key suffix "PRIMARY"
   - Supports both PKCS1 and PKCS8 PEM formats
   - Validates all keys at startup; fails fast if any key is invalid
@@ -426,7 +426,7 @@ curl -X POST http://localhost:8080/config/test_config/script/test \
 
 1. **Script Hot Reload**: Worker doesn't subscribe to `howk.scripts` topic, so script updates require worker restart or cache miss to load from Redis
 2. **API Script Cache**: API doesn't maintain in-memory script cache, queries Redis on every enqueue
-3. **Script Metrics**: No Prometheus metrics yet for script execution
+
 4. **Memory Limits**: Configured but not enforced at VM level (Lua limitation)
 
 ## Configuration
@@ -537,7 +537,7 @@ if not token then
     -- (Requires Phase 5: HTTP module)
     -- For now, use a placeholder
     token = "fetched_token"
-    
+
     -- Cache for 1 hour
     local err = kv.set("api_token", token, 3600)
     if err then
@@ -578,31 +578,31 @@ local token = kv.get("api_token")
 
 if not token then
     log.info("Token not cached, fetching from auth service")
-    
+
     -- Fetch token from auth service
     local resp, err = http.get(
         "https://auth.example.com/token",
         {Authorization = "Basic " .. credentials},
         {cache_ttl = 60}  -- Cache this request too
     )
-    
+
     if err then
         log.error("Failed to fetch token", {error = err})
         error("Token fetch failed: " .. err)
     end
-    
+
     if resp.status_code ~= 200 then
         log.error("Auth service returned error", {status = resp.status_code})
         error("Auth failed with status " .. resp.status_code)
     end
-    
+
     local data = json.decode(resp.body)
     token = data.access_token
-    
+
     -- Cache the token (expire 1 minute before actual expiry)
     local ttl = data.expires_in - 60
     kv.set("api_token", token, ttl)
-    
+
     log.info("Token fetched and cached", {ttl = ttl})
 else
     log.debug("Using cached token")
@@ -623,13 +623,13 @@ local access_token = kv.get("oauth:access_token")
 
 if not access_token then
     log.info("Access token not cached, checking for refresh token")
-    
+
     -- Step 2: Try to use refresh token
     local refresh_token = kv.get("oauth:refresh_token")
-    
+
     if not refresh_token then
         log.info("No refresh token, fetching initial credentials")
-        
+
         -- Step 3: Decrypt stored credentials
         local decrypted, err = crypto.decrypt_credential(
             "OAUTH_KEY",
@@ -640,9 +640,9 @@ if not access_token then
             log.error("Failed to decrypt credentials", {error = err})
             error("Decryption failed: " .. err)
         end
-        
+
         local creds = json.decode(decrypted)
-        
+
         -- Step 4: Exchange credentials for tokens
         local resp, err = http.get(
             "https://auth.example.com/oauth/token?grant_type=client_credentials",
@@ -651,40 +651,40 @@ if not access_token then
                 ["Content-Type"] = "application/json"
             }
         )
-        
+
         if err then
             log.error("Token request failed", {error = err})
             error("Token request failed: " .. err)
         end
-        
+
         local token_data = json.decode(resp.body)
         access_token = token_data.access_token
         refresh_token = token_data.refresh_token
-        
+
         -- Cache both tokens
         kv.set("oauth:access_token", access_token, token_data.expires_in - 60)
         kv.set("oauth:refresh_token", refresh_token, 86400) -- 24 hours
-        
+
         log.info("OAuth tokens obtained and cached")
     else
         log.info("Using refresh token to get new access token")
-        
+
         -- Step 5: Use refresh token
         local resp, err = http.get(
             "https://auth.example.com/oauth/refresh?token=" .. refresh_token
         )
-        
+
         if err or resp.status_code ~= 200 then
             log.error("Token refresh failed", {error = err, status = resp.status_code})
             -- Clear invalid refresh token
             kv.del("oauth:refresh_token")
             error("Token refresh failed")
         end
-        
+
         local token_data = json.decode(resp.body)
         access_token = token_data.access_token
         kv.set("oauth:access_token", access_token, token_data.expires_in - 60)
-        
+
         log.info("Access token refreshed")
     end
 end
@@ -702,7 +702,7 @@ log.info("OAuth flow complete", {has_token = true})
 1. ⏸️ Add script hot reload (Kafka subscription in worker/API)
 
 **Priority 2 (Production Readiness):**
-2. Add Prometheus metrics for script execution
+
 3. Implement Phase 10: Integration tests and documentation
 
 **Priority 3 (Advanced Features):**
@@ -796,3 +796,42 @@ log.info("OAuth flow complete", {has_token = true})
 
 ---
 *Last Updated: 2026-02-01 07:30 PM*
+
+## ✅ COMPLETED IMPLEMENTATION (2026-02-01 Update)
+
+### Phase 8: Binary Data & Header Control (COMPLETED)
+- Binary data support fully implemented and tested
+- `config.opt_out_default_headers` working correctly
+- Base64-encoded binary in JSON pattern documented
+- All byte values 0-255 preserved through pipeline
+
+### Script Hot Reload (COMPLETED)
+- `internal/script/consumer.go` - ScriptConsumer subscribes to `howk.scripts` topic
+- Worker now maintains local script cache synchronized with Kafka
+- Scripts survive Redis flushes (reloaded from compacted topic)
+- Tombstone messages properly handled for script deletion
+
+### Memory Limit Enforcement (COMPLETED)
+- Registry size limits configured via `lua.Options`
+- `ScriptErrorMemoryLimit` properly returned on overflow
+- Context-based timeout enforcement handles most CPU-bound cases
+
+### Documentation & Tests (COMPLETED)
+- `docs/LUA_ENGINE.md` - Complete engine documentation
+- `internal/script/consumer_test.go` - 12 tests for script consumer
+- `internal/script/engine_binary_test.go` - 6 tests for binary data handling
+- Real-world example test: Base64-encoded image → binary PNG output
+
+**New Files Added:**
+- `internal/script/consumer.go` - Kafka consumer for script synchronization
+- `internal/script/consumer_test.go` - Consumer unit tests
+- `internal/script/engine_binary_test.go` - Binary data handling tests
+- `docs/LUA_ENGINE.md` - Complete engine documentation
+
+**Modified Files:**
+- `internal/script/engine.go` - Memory limits, binary data handling
+- `internal/worker/worker.go` - Added SetScriptConsumer method
+- `cmd/worker/main.go` - Initialize and start script consumer
+
+---
+*Last Updated: 2026-02-01 10:30 PM - Implementation Complete*
