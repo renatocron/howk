@@ -431,7 +431,18 @@ Fast Lane (howk.pending)          Slow Lane (howk.slow)
 ```
 
 **Key behaviors:**
-- **Fail-open**: If Redis is unavailable, delivery proceeds normally
+
+| Component | Failure Mode | Behavior |
+|-----------|-------------|----------|
+| **Concurrency Check** | Fail-open | If Redis is unavailable, delivery proceeds normally without throttling |
+| **Circuit Breaker** | Fail-closed | If Redis is unavailable, requests are blocked (safety over availability) |
+| **Idempotency Check** | Fail-open | If Redis is unavailable, duplicate delivery is possible |
+| **Slow Lane Divert** | Fail-open | If divert to slow lane fails, delivery proceeds in fast lane |
+| **Stats Recording** | Fail-silent | Stats errors are logged but don't block delivery |
+
+- **Fail-open vs Fail-closed**: 
+  - **Fail-open** (concurrency, idempotency): Better to deliver duplicates than drop webhooks
+  - **Fail-closed** (circuit breaker): Better to pause delivery than overwhelm a failing endpoint
 - **Self-healing**: When endpoint recovers, traffic automatically returns to fast lane
 - **Crash recovery**: TTL on concurrency keys (2min default) auto-corrects leaked counts
 - **Floor protection**: Lua script ensures counter never goes below 0
@@ -444,6 +455,11 @@ Fast Lane (howk.pending)          Slow Lane (howk.slow)
 | `concurrency.inflight_ttl` | 2m | TTL for concurrency counter (crash recovery) |
 | `concurrency.slow_lane_rate` | 5 | Max deliveries/sec from slow lane per worker |
 | `kafka.topics.slow` | howk.slow | Slow lane Kafka topic name |
+| `ttl.retry_data_ttl` | 7d | TTL for compressed retry data in Redis |
+| `ttl.status_ttl` | 7d | TTL for webhook status records |
+| `ttl.circuit_state_ttl` | 24h | TTL for circuit breaker state |
+| `ttl.stats_ttl` | 48h | TTL for hourly stats counters |
+| `ttl.idempotency_ttl` | 24h | TTL for idempotency keys |
 
 Environment variables:
 ```bash
@@ -451,6 +467,11 @@ export HOWK_CONCURRENCY_MAX_INFLIGHT_PER_ENDPOINT=50
 export HOWK_CONCURRENCY_INFLIGHT_TTL=2m
 export HOWK_CONCURRENCY_SLOW_LANE_RATE=5
 export HOWK_KAFKA_TOPICS_SLOW=howk.slow
+export HOWK_TTL_RETRY_DATA_TTL=168h
+export HOWK_TTL_STATUS_TTL=168h
+export HOWK_TTL_CIRCUIT_STATE_TTL=24h
+export HOWK_TTL_STATS_TTL=48h
+export HOWK_TTL_IDEMPOTENCY_TTL=24h
 ```
 
 ## Retry Strategy
@@ -585,6 +606,7 @@ ttl:
   status_ttl: 168h
   stats_ttl: 48h
   idempotency_ttl: 24h
+  retry_data_ttl: 168h  # Compressed webhook data for retries
 ```
 
 ### Configuration Precedence

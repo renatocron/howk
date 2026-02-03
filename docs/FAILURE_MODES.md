@@ -6,6 +6,8 @@
   - [1. Redis Unavailable](#1-redis-unavailable)
   - [2. Kafka Broker Unavailable](#2-kafka-broker-unavailable)
   - [3. Both Redis AND Kafka Unavailable](#3-both-redis-and-kafka-unavailable)
+- [Component Failure Modes](#component-failure-modes)
+  - [Component Failure Behavior Summary](#component-failure-behavior-summary)
 - [Application Failures](#application-failures)
   - [4. Worker Crashes Mid-Processing](#4-worker-crashes-mid-processing)
   - [5. Scheduler Crashes](#5-scheduler-crashes)
@@ -23,8 +25,11 @@
 - [Reconciler Scenarios](#reconciler-scenarios)
   - [14. Reconciler Started While Workers Running](#14-reconciler-started-while-workers-running)
   - [15. Reconciler Fails Mid-Replay](#15-reconciler-fails-mid-replay)
+- [Partial Redis Failures](#partial-redis-failures)
+  - [16. Redis Latency Spike / Degraded Performance](#16-redis-latency-spike--degraded-performance)
+  - [17. Redis Memory Pressure](#17-redis-memory-pressure)
 - [Dead Letter Queue (DLQ) Classification](#dead-letter-queue-dlq-classification)
-  - [16. Understanding DLQ Reason Types](#16-understanding-dlq-reason-types)
+  - [18. Understanding DLQ Reason Types](#18-understanding-dlq-reason-types)
 - [Monitoring Checklist](#monitoring-checklist)
 
 ## Infrastructure Failures
@@ -34,16 +39,32 @@
 <summary>Details</summary>
 
 **Symptoms:**
-- Workers continue processing but lose idempotency protection
-- Duplicate deliveries possible
-- No circuit breaker protection (endpoints not protected from overload)
+- Workers continue processing but lose some protections
+- Duplicate deliveries possible (idempotency fails open)
+- No circuit breaker protection → endpoints may be overwhelmed
 - Status queries fail
-
-**Behavior:**
-- Workers **fail open**: Continue delivering webhooks
-- Circuit breaker checks fail → allow all requests
-- Idempotency checks fail → log warning and proceed
 - Stats not recorded
+
+**Fail-Open vs Fail-Closed Behavior:**
+
+| Component | Failure Mode | Impact |
+|-----------|-------------|--------|
+| Concurrency Check | **Fail-open** | Delivery proceeds without throttling. May overwhelm slow endpoints. |
+| Circuit Breaker | **Fail-closed** | Requests blocked if state can't be determined. **Note**: Currently returns error, may cause delivery to proceed without circuit protection. |
+| Idempotency Check | **Fail-open** | Duplicate delivery possible. Better than dropping webhooks. |
+| Slow Lane Divert | **Fail-open** | If divert fails, delivery proceeds in fast lane. |
+| Stats Recording | **Fail-silent** | Stats errors logged but don't block delivery. |
+| Status Updates | **Fail-silent** | Status not updated in Redis, but delivery continues. |
+
+**Why Fail-Open for Concurrency/Idempotency?**
+- Better to deliver duplicates than drop webhooks
+- At-least-once delivery guarantee takes priority
+- Kafka remains the source of truth
+
+**Why Fail-Closed for Circuit Breaker?**
+- Better to pause delivery than overwhelm a failing endpoint
+- Protects both HOWK and the recipient
+- Circuit will reopen when Redis recovers
 
 **Recovery:**
 1. Bring Redis back online (empty or from backup)
@@ -121,6 +142,23 @@
 
 ---
 
+## Component Failure Modes
+
+### Component Failure Behavior Summary
+
+| Component | When It Fails | Behavior | Risk Level |
+|-----------|--------------|----------|------------|
+| **Concurrency Check** | Redis error | Fail-open: proceed without throttling | Medium - may overwhelm slow endpoints |
+| **Circuit Breaker Check** | Redis error | Returns error, may bypass protection | High - no protection for failing endpoints |
+| **Idempotency Check** | Redis error | Fail-open: proceed (may duplicate) | Low - duplicates better than drops |
+| **Slow Lane Divert** | Kafka publish error | Fail-open: deliver in fast lane | Low - delivery continues |
+| **Stats Recording** | Redis error | Fail-silent: log and continue | None - no delivery impact |
+| **Status Updates** | Redis error | Fail-silent: log and continue | None - no delivery impact |
+| **Retry Data Store** | Redis error | Log error, will redeliver from Kafka | Low - Kafka is source of truth |
+| **Retry Scheduling** | Redis error | Log error, will redeliver from Kafka | Low - at-least-once preserved |
+
+---
+
 ## Application Failures
 
 ### 4. Worker Crashes Mid-Processing
@@ -179,6 +217,72 @@
 **Prevention:**
 - Client should use `idempotency_key` field
 - Future: Add idempotency check in API before publishing
+
+</details>
+
+---
+
+## Partial Redis Failures
+
+### 16. Redis Latency Spike / Degraded Performance
+<details>
+<summary>Details</summary>
+
+**Symptoms:**
+- Redis operations timeout or take longer than usual
+- Worker throughput drops
+- Some operations fail while others succeed
+
+**Behavior:**
+- Operations that fail follow their failure mode (fail-open/fail-closed)
+- Operations that succeed continue normally
+- System operates in "degraded mode" with reduced protections
+
+**Monitoring:**
+```bash
+# Check Redis latency
+redis-cli --latency-history -h <redis-host>
+
+# Monitor slow commands
+redis-cli SLOWLOG GET 10
+```
+
+**Recovery:**
+1. Identify cause (network, memory pressure, bgsave, etc.)
+2. Scale Redis vertically (more CPU/memory)
+3. Enable Redis persistence optimizations
+4. Consider Redis Cluster for better performance
+
+</details>
+
+---
+
+### 17. Redis Memory Pressure
+<details>
+<summary>Details</summary>
+
+**Symptoms:**
+- Redis evicts keys (if `maxmemory-policy` is set)
+- Operations may fail with OOM errors
+- TTL may expire keys prematurely
+
+**Impact on HOWK:**
+- Circuit breaker states may be evicted → circuits reset to CLOSED
+- Retry data may be evicted → retries fail (will redeliver from Kafka)
+- Status records evicted → status queries return "not found"
+- Stats counters evicted → inaccurate statistics
+
+**Recommended `maxmemory-policy`:**
+```bash
+# Use allkeys-lru to evict least recently used keys
+# This preserves frequently accessed circuit states
+CONFIG SET maxmemory-policy allkeys-lru
+```
+
+**Recovery:**
+1. Increase Redis memory
+2. Review TTL settings (shorter TTL = less memory)
+3. Monitor memory usage proactively
 
 </details>
 
@@ -399,7 +503,7 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 
 ## Dead Letter Queue (DLQ) Classification
 
-### 16. Understanding DLQ Reason Types
+### 18. Understanding DLQ Reason Types
 <details>
 <summary>Details</summary>
 
@@ -514,6 +618,20 @@ kafka-console-consumer --topic howk.deadletter \
 - DLQ unrecoverable errors spiking (indicates configuration issues)
 - Circuit breaker stuck OPEN > 1 hour
 - "CRITICAL: Retry message has nil webhook" logged
+- Redis latency > 100ms (p99)
+- Redis memory usage > 80%
+
+**Redis-Specific Alerts:**
+```bash
+# Monitor Redis latency spikes
+redis-cli --latency-history | awk '$2 > 100 {print "ALERT: Redis latency > 100ms"}'
+
+# Monitor Redis memory pressure
+redis-cli INFO memory | grep used_memory_human
+
+# Monitor slow commands
+redis-cli SLOWLOG GET 10
+```
 
 **Metrics to Track:**
 - Webhooks enqueued/sec
@@ -524,16 +642,43 @@ kafka-console-consumer --topic howk.deadletter \
 - DLQ total message count
 - DLQ exhausted vs unrecoverable ratio
 - DLQ messages by config_id (identify problematic tenants)
+- Redis operations/sec
+- Redis hit/miss ratio
+- Redis memory usage
+- Redis connected clients
 
 **Logs to Index:**
 - All ERROR level logs
+- "Concurrency check failed, proceeding with delivery" (fail-open event)
+- "Circuit open, scheduling retry" (circuit protection active)
 - "Already processed" (detect duplicate sends)
 - "Circuit opened" (endpoint issues)
 - "Retries exhausted" (persistent failures → DLQ exhausted)
 - "Unrecoverable error" (config issues → DLQ unrecoverable)
+- "Failed to decrement inflight counter" (potential counter leak)
+
+**Fail-Open Event Monitoring:**
+These log messages indicate fail-open behavior (watch for spikes):
+```bash
+# Concurrency check failure (fail-open)
+grep "Concurrency check failed, proceeding with delivery" /var/log/howk/worker.log
+
+# Slow lane divert failure (fail-open)
+grep "Failed to divert to slow lane, proceeding with delivery" /var/log/howk/worker.log
+
+# Idempotency check failure (fail-open)
+grep "Idempotency check failed, proceeding" /var/log/howk/worker.log
+```
 
 **DLQ Monitoring Best Practices:**
 - **Exhausted webhooks**: Spike indicates endpoint outages, review circuit breaker states
 - **Unrecoverable webhooks**: Spike indicates bad configuration, review recent config changes
 - Set up separate alerts for each DLQ type with different severity levels
 - Create dashboards showing DLQ breakdown by reason_type and config_id
+
+**Redis Health Dashboard:**
+- Memory usage over time
+- Command latency percentiles
+- Connected clients
+- Key expiration rate (should match TTL settings)
+- Evicted keys count (should be 0 or very low)
