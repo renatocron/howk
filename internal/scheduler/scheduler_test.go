@@ -139,6 +139,16 @@ func (m *MockHotState) DeleteScript(ctx context.Context, configID domain.ConfigI
 	return args.Error(0)
 }
 
+func (m *MockHotState) IncrInflight(ctx context.Context, endpointHash domain.EndpointHash, ttl time.Duration) (int64, error) {
+	args := m.Called(ctx, endpointHash, ttl)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockHotState) DecrInflight(ctx context.Context, endpointHash domain.EndpointHash) error {
+	args := m.Called(ctx, endpointHash)
+	return args.Error(0)
+}
+
 // MockPublisher implements broker.WebhookPublisher for testing
 type MockPublisher struct {
 	mock.Mock
@@ -166,6 +176,11 @@ func (m *MockPublisher) Close() error {
 
 func (m *MockPublisher) Ping(ctx context.Context) error {
 	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockPublisher) PublishToSlow(ctx context.Context, webhook *domain.Webhook) error {
+	args := m.Called(ctx, webhook)
 	return args.Error(0)
 }
 

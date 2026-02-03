@@ -94,7 +94,8 @@ func TestScheduler_PopAndLockRetries(t *testing.T) {
 	// Wait for webhook to be re-enqueued
 	select {
 	case msg := <-received:
-		assert.Equal(t, webhook.ID, domain.WebhookID(msg.Key))
+		// Note: Partition key is now ConfigID (not WebhookID) for ordering by config
+		assert.Equal(t, webhook.ConfigID, domain.ConfigID(msg.Key))
 
 		// Verify it's the webhook we scheduled
 		var receivedWebhook domain.Webhook

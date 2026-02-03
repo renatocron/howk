@@ -30,6 +30,7 @@ type Config struct {
 	Scheduler      SchedulerConfig      `mapstructure:"scheduler"`
 	TTL            TTLConfig            `mapstructure:"ttl"`
 	Lua            LuaConfig            `mapstructure:"lua"`
+	Concurrency    ConcurrencyConfig    `mapstructure:"concurrency"`
 }
 
 type APIConfig struct {
@@ -65,6 +66,7 @@ type TopicsConfig struct {
 	Results    string `mapstructure:"results"`
 	DeadLetter string `mapstructure:"deadletter"`
 	Scripts    string `mapstructure:"scripts"`
+	Slow       string `mapstructure:"slow"`
 }
 
 type RedisConfig struct {
@@ -108,6 +110,23 @@ type SchedulerConfig struct {
 	LockTimeout  time.Duration `mapstructure:"lock_timeout"`
 }
 
+// ConcurrencyConfig configures the penalty box / slow lane behavior.
+type ConcurrencyConfig struct {
+	// MaxInflightPerEndpoint is the threshold above which webhooks are
+	// diverted to the slow topic. Default: 50.
+	MaxInflightPerEndpoint int `mapstructure:"max_inflight_per_endpoint"`
+
+	// InflightTTL is the TTL for the concurrency counter key.
+	// Acts as a safety net: if a worker crashes mid-delivery, the counter
+	// will auto-expire and self-correct. Should be > delivery timeout.
+	// Default: 2m (= 4x the 30s delivery timeout).
+	InflightTTL time.Duration `mapstructure:"inflight_ttl"`
+
+	// SlowLaneRate is the maximum number of deliveries per second
+	// from the slow lane per worker instance. Default: 5.
+	SlowLaneRate int `mapstructure:"slow_lane_rate"`
+}
+
 type LuaConfig struct {
 	Enabled       bool              `mapstructure:"enabled"`
 	Timeout       time.Duration     `mapstructure:"timeout"`
@@ -140,6 +159,7 @@ func DefaultConfig() *Config {
 				Results:    "howk.results",
 				DeadLetter: "howk.deadletter",
 				Scripts:    "howk.scripts",
+				Slow:       "howk.slow",
 			},
 			ConsumerGroup:          "howk-workers",
 			Retention:              7 * 24 * time.Hour, // 7 days
@@ -203,6 +223,11 @@ func DefaultConfig() *Config {
 			AllowHostsByNamespace: map[string]string{},
 			HTTPCacheEnabled:      true,
 			HTTPCacheTTL:          5 * time.Minute,
+		},
+		Concurrency: ConcurrencyConfig{
+			MaxInflightPerEndpoint: 50,
+			InflightTTL:            2 * time.Minute,
+			SlowLaneRate:           5,
 		},
 	}
 }
@@ -334,6 +359,11 @@ func bindEnvVariables(v *viper.Viper) error {
 		"lua.allow_hosts_by_namespace",
 		"lua.http_cache_enabled",
 		"lua.http_cache_ttl",
+		// Concurrency / Slow Lane
+		"kafka.topics.slow",
+		"concurrency.max_inflight_per_endpoint",
+		"concurrency.inflight_ttl",
+		"concurrency.slow_lane_rate",
 	}
 
 	for _, key := range keys {

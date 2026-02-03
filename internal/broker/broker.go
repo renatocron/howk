@@ -40,6 +40,10 @@ type WebhookPublisher interface {
 	// PublishDeadLetter publishes to the dead letter topic
 	PublishDeadLetter(ctx context.Context, dl *domain.DeadLetter) error
 
+	// PublishToSlow publishes a webhook to the slow topic for rate-limited delivery.
+	// Uses ConfigID as the partition key for ordering.
+	PublishToSlow(ctx context.Context, webhook *domain.Webhook) error
+
 	Close() error
 }
 

@@ -69,6 +69,11 @@ func (m *MockPublisher) Close() error {
 	return args.Error(0)
 }
 
+func (m *MockPublisher) PublishToSlow(ctx context.Context, webhook *domain.Webhook) error {
+	args := m.Called(ctx, webhook)
+	return args.Error(0)
+}
+
 // MockHotState implements hotstate.HotState
 type MockHotState struct {
 	mock.Mock
@@ -221,6 +226,16 @@ func (m *MockHotState) CircuitBreaker() hotstate.CircuitBreakerChecker {
 	return args.Get(0).(hotstate.CircuitBreakerChecker)
 }
 
+func (m *MockHotState) IncrInflight(ctx context.Context, endpointHash domain.EndpointHash, ttl time.Duration) (int64, error) {
+	args := m.Called(ctx, endpointHash, ttl)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockHotState) DecrInflight(ctx context.Context, endpointHash domain.EndpointHash) error {
+	args := m.Called(ctx, endpointHash)
+	return args.Error(0)
+}
+
 // MockDeliveryClient implements methods used by Worker from delivery.Client
 type MockDeliveryClient struct {
 	mock.Mock
@@ -282,6 +297,12 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 
 	// Set up the mock to return the circuit breaker
 	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
+
+	// Default: concurrency check passes (inflight count = 1, below threshold)
+	mockHotState.On("IncrInflight", mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(1), nil).Maybe()
+	mockHotState.On("DecrInflight", mock.Anything, mock.Anything).
+		Return(nil).Maybe()
 
 	// Create a test script engine with disabled config (scripts won't execute)
 	testScriptLoader := script.NewLoader()

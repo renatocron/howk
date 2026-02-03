@@ -56,6 +56,15 @@ type HotState interface {
 
 	// Redis client access for advanced operations
 	Client() *redis.Client
+
+	// IncrInflight atomically increments the in-flight counter for an endpoint.
+	// Returns the new count after increment.
+	// The key has a TTL to auto-expire if workers crash (leak protection).
+	IncrInflight(ctx context.Context, endpointHash domain.EndpointHash, ttl time.Duration) (int64, error)
+
+	// DecrInflight atomically decrements the in-flight counter for an endpoint.
+	// Uses a Lua script to ensure the counter never goes below zero.
+	DecrInflight(ctx context.Context, endpointHash domain.EndpointHash) error
 }
 
 // CircuitBreakerChecker provides circuit breaker functionality

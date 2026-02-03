@@ -136,6 +136,14 @@ func main() {
 		}
 	}()
 
+	// Start slow worker goroutine
+	slowWorker := worker.NewSlowWorker(w, kafkaBroker, cfg)
+	go func() {
+		if err := slowWorker.Run(ctx); err != nil {
+			log.Error().Err(err).Msg("Slow worker error")
+		}
+	}()
+
 	// Wait for shutdown signal
 	<-sigCh
 	log.Info().Msg("Shutdown signal received")

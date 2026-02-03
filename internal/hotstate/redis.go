@@ -23,6 +23,7 @@ const (
 	hllPrefix          = "hll:"
 	circuitStatePrefix = "circuit:"
 	scriptPrefix       = "script:"
+	concurrencyPrefix  = "concurrency:"
 )
 
 // RedisHotState implements HotState using Redis
@@ -631,6 +632,7 @@ func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
 		statsPrefix + "*",
 		hllPrefix + "*",
 		circuitStatePrefix + "*",
+		concurrencyPrefix + "*",
 	}
 
 	for _, pattern := range patterns {
@@ -665,4 +667,43 @@ func (r *RedisHotState) Close() error {
 // It's kept for backward compatibility/existing usage if any component directly uses it.
 func (r *RedisHotState) Client() *redis.Client {
 	return r.rdb
+}
+
+// --- Concurrency Tracking (Penalty Box) ---
+
+// IncrInflight atomically increments the in-flight counter for an endpoint.
+// Returns the new count after increment.
+// The TTL is refreshed on every call to keep the key alive during active delivery.
+func (r *RedisHotState) IncrInflight(ctx context.Context, endpointHash domain.EndpointHash, ttl time.Duration) (int64, error) {
+	key := concurrencyPrefix + string(endpointHash)
+	pipe := r.rdb.Pipeline()
+	incrCmd := pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, ttl)
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("incr inflight: %w", err)
+	}
+	return incrCmd.Val(), nil
+}
+
+// decrInflightScript is a Lua script that decrements the counter but never goes below zero.
+// This prevents counter drift from edge cases like duplicate processing.
+var decrInflightScript = redis.NewScript(`
+	local key = KEYS[1]
+	local current = tonumber(redis.call('GET', key) or '0')
+	if current > 0 then
+		return redis.call('DECR', key)
+	end
+	return 0
+`)
+
+// DecrInflight atomically decrements the in-flight counter for an endpoint.
+// Uses a Lua script to ensure the counter never goes below zero.
+func (r *RedisHotState) DecrInflight(ctx context.Context, endpointHash domain.EndpointHash) error {
+	key := concurrencyPrefix + string(endpointHash)
+	_, err := decrInflightScript.Run(ctx, r.rdb, []string{key}).Int64()
+	if err != nil {
+		return fmt.Errorf("decr inflight: %w", err)
+	}
+	return nil
 }

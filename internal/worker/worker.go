@@ -120,6 +120,43 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 		logger.Debug().Msg("Probe request (circuit half-open)")
 	}
 
+	// Check in-flight concurrency (penalty box gate)
+	inflightAcquired := false
+	inflightCount, err := w.hotstate.IncrInflight(ctx, webhook.EndpointHash, w.config.Concurrency.InflightTTL)
+	if err != nil {
+		logger.Warn().Err(err).Msg("Concurrency check failed, proceeding with delivery")
+		// On Redis failure, proceed normally (fail-open)
+	} else if inflightCount > int64(w.config.Concurrency.MaxInflightPerEndpoint) {
+		// Over threshold: decrement (we just incremented) and divert
+		w.hotstate.DecrInflight(ctx, webhook.EndpointHash)
+		logger.Info().
+			Int64("inflight", inflightCount).
+			Int("threshold", w.config.Concurrency.MaxInflightPerEndpoint).
+			Msg("Endpoint over concurrency threshold, diverting to slow lane")
+
+		if err := w.publisher.PublishToSlow(ctx, &webhook); err != nil {
+			logger.Error().Err(err).Msg("Failed to divert to slow lane, proceeding with delivery")
+			// Fail-open: re-increment and deliver normally
+			w.hotstate.IncrInflight(ctx, webhook.EndpointHash, w.config.Concurrency.InflightTTL)
+			inflightAcquired = true
+		} else {
+			w.recordStats(ctx, "diverted", &webhook)
+			return nil // Successfully diverted
+		}
+	} else {
+		// Track that we own an inflight slot from this point
+		inflightAcquired = true
+	}
+
+	// Ensure DECR is called on all exit paths after we acquire an inflight slot
+	defer func() {
+		if inflightAcquired {
+			if err := w.hotstate.DecrInflight(ctx, webhook.EndpointHash); err != nil {
+				logger.Warn().Err(err).Msg("Failed to decrement inflight counter")
+			}
+		}
+	}()
+
 	// Update status to delivering
 	w.updateStatus(ctx, &webhook, domain.StateDelivering, nil)
 

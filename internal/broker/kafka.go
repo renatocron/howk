@@ -227,7 +227,7 @@ func (p *KafkaWebhookPublisher) PublishWebhook(ctx context.Context, webhook *dom
 	}
 
 	msg := Message{
-		Key:   []byte(webhook.ID),
+		Key:   []byte(webhook.ConfigID),
 		Value: data,
 		Headers: map[string]string{
 			"config_id":     string(webhook.ConfigID),
@@ -279,6 +279,26 @@ func (p *KafkaWebhookPublisher) PublishDeadLetter(ctx context.Context, dl *domai
 
 func (p *KafkaWebhookPublisher) Close() error {
 	return p.broker.Close()
+}
+
+func (p *KafkaWebhookPublisher) PublishToSlow(ctx context.Context, webhook *domain.Webhook) error {
+	data, err := json.Marshal(webhook)
+	if err != nil {
+		return fmt.Errorf("marshal webhook for slow: %w", err)
+	}
+
+	msg := Message{
+		Key:   []byte(webhook.ConfigID),
+		Value: data,
+		Headers: map[string]string{
+			"config_id":     string(webhook.ConfigID),
+			"endpoint_hash": string(webhook.EndpointHash),
+			"attempt":       fmt.Sprintf("%d", webhook.Attempt),
+			"source":        "penalty_box",
+		},
+	}
+
+	return p.broker.Publish(ctx, p.topics.Slow, msg)
 }
 
 // Ping checks connectivity to the underlying Kafka broker
