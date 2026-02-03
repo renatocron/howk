@@ -9,6 +9,7 @@ A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis
 - **Kafka is the source of truth** — every webhook and delivery result is a Kafka record
 - **Redis is rebuildable hot state** — if Redis dies, replay from Kafka
 - **Circuit breakers protect endpoints** — failing endpoints don't burn your retry budget
+- **Penalty box isolates slow endpoints** — excess in-flight traffic is rate-limited to protect the fast lane
 - **At-least-once delivery** — we never lose a webhook, duplicates are the receiver's problem
 
 ## Architecture
@@ -30,6 +31,7 @@ A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis
                  │            Kafka Cluster                 │
                  │                                          │
                  │  howk.pending    → webhooks to deliver   │
+                 │  howk.slow       → rate-limited lane     │
                  │  howk.results    → delivery outcomes     │
                  │  howk.deadletter → exhausted retries     │
                  │                                          │
@@ -57,6 +59,10 @@ A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis
   │  Circuit Breaker (per endpoint):                                  │
   │    HSET circuit:{endpoint_hash} state=OPEN failures=5 last=...   │
   │                                                                   │
+  │  Concurrency Control (Penalty Box):                               │
+  │    INCR concurrency:{endpoint_hash}  (with TTL)                  │
+  │    Lua: DECR with floor at 0 to prevent drift                     │
+  │                                                                   │
   │  Retry Scheduling:                                                │
   │    ZADD retries <next_at_unix> <webhook_id:attempt>              │
   │    SET retry_data:{id} <compressed_webhook>                      │
@@ -79,6 +85,7 @@ A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis
 flowchart TB
     subgraph Kafka["Kafka Topics"]
         PENDING[("howk.pending")]
+        SLOW[("howk.slow<br/>Rate-limited lane")]
         RESULTS[("howk.results")]
         DLQ[("howk.deadletter")]
     end
@@ -87,11 +94,16 @@ flowchart TB
         DATA[("retry_data:{webhook_id}<br/>Compressed JSON<br/>TTL: 7 days")]
         ZSET[("retries ZSET<br/>score: unix_timestamp<br/>member: webhook_id:attempt")]
         META[("retry_meta:{id}:{attempt}<br/>reason, scheduled_at")]
+        CONC[("concurrency:{endpoint_hash}<br/>In-flight counter<br/>TTL: 2min")]
     end
 
-    subgraph Worker["Worker Process"]
+    subgraph Worker["Worker Process (Fast Lane)"]
         W_CONSUME["1. Consume from<br/>howk.pending"]
+        W_CHECK_CB{"Circuit<br/>Allows?"}
+        W_CHECK_CONC{"Inflight &lt;<br/>threshold?"}
+        W_INCR["IncrInflight()<br/>INCR + EXPIRE"]
         W_DELIVER["2. Deliver HTTP"]
+        W_DECR["DecrInflight()<br/>Lua: DECR ≥0"]
         W_SUCCESS{"Success?"}
         W_RETRY{"Should<br/>Retry?"}
         W_STORE["StoreRetryData()<br/>SET retry_data:{id}"]
@@ -99,6 +111,13 @@ flowchart TB
         W_CLEANUP["DeleteRetryData()<br/>DEL retry_data:{id}"]
         W_PUBLISH_OK["PublishResult()"]
         W_PUBLISH_DLQ["PublishDeadLetter()"]
+        W_PUBLISH_SLOW["PublishToSlow()<br/>Divert to slow lane"]
+    end
+
+    subgraph SlowWorker["Slow Worker Process"]
+        SW_CONSUME["1. Consume from<br/>howk.slow"]
+        SW_RATE["2. Rate limit<br/>(5/sec default)"]
+        SW_REUSE["3. Same logic as<br/>fast lane"]
     end
 
     subgraph Scheduler["Scheduler Process"]
@@ -111,8 +130,20 @@ flowchart TB
     end
 
     PENDING --> W_CONSUME
-    W_CONSUME --> W_DELIVER
+    W_CONSUME --> W_CHECK_CB
+    W_CHECK_CB -->|No| W_SCHEDULE
+    W_CHECK_CB -->|Yes| W_INCR
+    W_INCR --> CONC
+    W_INCR --> W_CHECK_CONC
+    
+    W_CHECK_CONC -->|Yes| W_DELIVER
+    W_CHECK_CONC -->|No| W_PUBLISH_SLOW
+    W_PUBLISH_SLOW --> SLOW
+    W_PUBLISH_SLOW -.->|decr| CONC
+    
     W_DELIVER --> W_SUCCESS
+    W_DELIVER -.->|defer| W_DECR
+    W_DECR --> CONC
     
     W_SUCCESS -->|Yes| W_CLEANUP
     W_CLEANUP --> W_PUBLISH_OK
@@ -129,6 +160,11 @@ flowchart TB
     W_CLEANUP --> W_PUBLISH_DLQ
     W_PUBLISH_DLQ --> DLQ
 
+    SLOW --> SW_CONSUME
+    SW_CONSUME --> SW_RATE
+    SW_RATE --> SW_REUSE
+    SW_REUSE --> W_CHECK_CB
+
     S_POLL --> S_POP
     S_POP --> ZSET
     ZSET --> S_PARSE
@@ -143,14 +179,16 @@ flowchart TB
     classDef kafka fill:#ff9800,stroke:#e65100,color:#000
     classDef redis fill:#dc382d,stroke:#a41e11,color:#fff
     classDef worker fill:#2196f3,stroke:#1565c0,color:#fff
+    classDef slowworker fill:#ffeb3b,stroke:#f9a825,color:#000
     classDef scheduler fill:#4caf50,stroke:#2e7d32,color:#fff
-    classDef decision fill:#ffeb3b,stroke:#f9a825,color:#000
+    classDef decision fill:#ff9800,stroke:#e65100,color:#000
 
-    class PENDING,RESULTS,DLQ kafka
-    class DATA,ZSET,META redis
-    class W_CONSUME,W_DELIVER,W_STORE,W_SCHEDULE,W_CLEANUP,W_PUBLISH_OK,W_PUBLISH_DLQ worker
+    class PENDING,SLOW,RESULTS,DLQ kafka
+    class DATA,ZSET,META,CONC redis
+    class W_CONSUME,W_DELIVER,W_STORE,W_SCHEDULE,W_CLEANUP,W_PUBLISH_OK,W_PUBLISH_DLQ,W_INCR,W_DECR,W_PUBLISH_SLOW worker
+    class SW_CONSUME,SW_RATE,SW_REUSE slowworker
     class S_POLL,S_POP,S_PARSE,S_FETCH,S_PUBLISH,S_ACK scheduler
-    class W_SUCCESS,W_RETRY decision
+    class W_SUCCESS,W_RETRY,W_CHECK_CB,W_CHECK_CONC decision
 ```
 
 ### Retry Lifecycle Sequence
@@ -253,6 +291,37 @@ stateDiagram-v2
     
     Pending --> Delivering: Worker Consume
     
+    state Delivering {
+        [*] --> CheckCircuit: Receive message
+        CheckCircuit --> CircuitOpen: circuit open
+        CheckCircuit --> CheckConcurrency: circuit allows
+        
+        CheckConcurrency --> FastLane: inflight < threshold
+        CheckConcurrency --> DivertToSlow: inflight ≥ threshold
+        
+        FastLane --> HTTPDeliver: INCR concurrency
+        DivertToSlow --> [*]: Publish to howk.slow
+        
+        HTTPDeliver --> Success: 2xx response
+        HTTPDeliver --> Failure: error/timeout
+        
+        Success --> [*]: DECR + publish result
+        Failure --> ScheduleRetry: retryable
+        Failure --> DLQ: non-retryable
+        ScheduleRetry --> [*]: DECR + schedule
+        DLQ --> [*]: DECR + dead letter
+        
+        CircuitOpen --> ScheduleRetryCircuit: schedule far future
+        ScheduleRetryCircuit --> [*]
+    }
+    
+    state SlowLane {
+        [*] --> RateLimitedConsume: Consume from howk.slow
+        RateLimitedConsume --> ReCheck: Rate limited
+        ReCheck --> RetryDeliver: Re-check concurrency
+        RetryDeliver --> Delivering: Process normally
+    }
+    
     Delivering --> Delivered: HTTP 2xx
     Delivering --> Failed: HTTP 5xx/408/429
     Delivering --> Exhausted: HTTP 4xx
@@ -263,6 +332,22 @@ stateDiagram-v2
     Delivered --> [*]: ✓ Success
     Exhausted --> [*]: ✗ DLQ
 
+    note right of Delivering
+        Concurrency Control:
+        • INCR concurrency:{hash}
+        • Check against threshold
+        • DECR on all exits
+        • Floor at 0 (Lua script)
+    end note
+    
+    note right of SlowLane
+        Self-healing:
+        • Rate limited (5/sec)
+        • Re-checks concurrency
+        • Returns to fast lane
+          when endpoint recovers
+    end note
+    
     note right of Failed
         Redis State:
         • retry_data:{id} = compressed
@@ -286,6 +371,9 @@ stateDiagram-v2
 
 | Operation | Component | Redis Commands | When Called |
 |-----------|-----------|----------------|-------------|
+| `IncrInflight()` | Worker | `INCR concurrency:{hash}`<br>`EXPIRE concurrency:{hash} {ttl}` | Before delivery attempt |
+| `DecrInflight()` | Worker | `Lua: DECR if > 0` | After delivery (success/fail/DLQ) |
+| `PublishToSlow()` | Worker | Kafka Produce to `howk.slow` | When inflight ≥ threshold |
 | `StoreRetryData()` | Worker | `SET retry_data:{id} compressed EX 604800` | Before scheduling retry |
 | `ScheduleRetry()` | Worker | `ZADD retries score member`<br>`SET retry_meta:{ref}` | After storing data |
 | `PopAndLockRetries()` | Scheduler | `Lua: ZRANGEBYSCORE + ZADD future` | Poll loop (every 1s) |
@@ -321,6 +409,50 @@ Per-endpoint circuit breaker with three states:
 
 **Circuit state is per-endpoint, stored in Redis, rebuildable from Kafka results.**
 
+## Penalty Box / Slow Lane
+
+Prevents slow/timing-out endpoints from starving the fast delivery path by routing excess in-flight traffic to a rate-limited slow topic.
+
+### How It Works
+
+```
+Fast Lane (howk.pending)          Slow Lane (howk.slow)
+┌─────────────────────┐          ┌─────────────────────┐
+│ Consume webhook     │          │ Rate-limited consume│
+│ INCR concurrency    │          │ (5/sec per worker)  │
+│ Check threshold     │          │                     │
+│ (< 50 by default)   │          │ Re-check concurrency│
+│                     │          │ If recovered → fast │
+│ If over threshold ──┼────────►│ If still slow ──────┼──► (backpressure)
+│                     │          │                     │
+│ HTTP POST           │          │ HTTP POST           │
+│ DECR concurrency    │          │ DECR concurrency    │
+└─────────────────────┘          └─────────────────────┘
+```
+
+**Key behaviors:**
+- **Fail-open**: If Redis is unavailable, delivery proceeds normally
+- **Self-healing**: When endpoint recovers, traffic automatically returns to fast lane
+- **Crash recovery**: TTL on concurrency keys (2min default) auto-corrects leaked counts
+- **Floor protection**: Lua script ensures counter never goes below 0
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `concurrency.max_inflight_per_endpoint` | 50 | Threshold above which webhooks are diverted |
+| `concurrency.inflight_ttl` | 2m | TTL for concurrency counter (crash recovery) |
+| `concurrency.slow_lane_rate` | 5 | Max deliveries/sec from slow lane per worker |
+| `kafka.topics.slow` | howk.slow | Slow lane Kafka topic name |
+
+Environment variables:
+```bash
+export HOWK_CONCURRENCY_MAX_INFLIGHT_PER_ENDPOINT=50
+export HOWK_CONCURRENCY_INFLIGHT_TTL=2m
+export HOWK_CONCURRENCY_SLOW_LANE_RATE=5
+export HOWK_KAFKA_TOPICS_SLOW=howk.slow
+```
+
 ## Retry Strategy
 
 Exponential backoff with circuit-aware delays:
@@ -341,7 +473,7 @@ Circuit HALF_OPEN: immediate (it's a probe)
 | Binary | Purpose |
 |--------|---------|
 | `howk-api` | HTTP API for enqueueing webhooks |
-| `howk-worker` | Consumes pending, delivers, produces results |
+| `howk-worker` | Consumes pending, delivers, produces results. Includes both fast lane and slow lane workers |
 | `howk-scheduler` | Pops due retries from Redis, re-enqueues to Kafka |
 | `howk-reconciler` | Rebuilds Redis state from Kafka replay |
 
@@ -410,6 +542,7 @@ kafka:
     - localhost:19092
   topics:
     pending: howk.pending
+    slow: howk.slow
     results: howk.results
     deadletter: howk.deadletter
   consumer_group: howk-workers
@@ -437,6 +570,11 @@ circuit_breaker:
   recovery_timeout: 5m
   probe_interval: 60s
   success_threshold: 2
+
+concurrency:
+  max_inflight_per_endpoint: 50
+  inflight_ttl: 2m
+  slow_lane_rate: 5
 
 scheduler:
   poll_interval: 1s
