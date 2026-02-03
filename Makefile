@@ -53,7 +53,7 @@ test-unit-coverage:
 
 # Integration tests (requires infrastructure)
 test-integration:
-	go test -v -race -count=1 -p 1 -tags=integration ./...
+	go test -v -race -count=1 -tags=integration ./...
 
 # E2E tests (requires all services)
 test-e2e:
@@ -66,7 +66,7 @@ test-all: test-unit test-integration test-e2e
 test-ci: infra
 	@echo "Waiting for services..."
 	@sleep 15
-	go test -v -race -count=1 -p 1 -tags=integration -timeout=10m ./...
+	go test -v -race -count=1 -tags=integration -timeout=10m ./...
 
 test-coverage:
 	go test -coverprofile=coverage.out -coverpkg=./... ./...
@@ -94,7 +94,7 @@ check-infra:
 
 # Combined coverage for CI (unit + integration, auto-starts infrastructure if needed)
 test-coverage-ci: check-infra
-	go test -race -coverprofile=coverage.out -coverpkg=./... -count=1 -p 1 -tags=integration -timeout=10m ./...
+	go test -race -coverprofile=coverage.out -coverpkg=./... -count=1 -tags=integration -timeout=10m ./...
 	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"

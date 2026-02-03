@@ -152,11 +152,63 @@ make fmt
 - **Integration tests:** Require Docker infrastructure, marked with `//go:build integration` tag
 - **Test utilities:** Located in `internal/testutil/`
 
+### Test Isolation for Parallel Execution
+
+Integration tests use isolated environments to enable parallel execution. Each test gets:
+- **Unique Kafka topics:** `test-{ULID}-howk.pending`, `test-{ULID}-howk.results`, etc.
+- **Unique Redis key prefix:** `test:{ULID}:status:*`, `test:{ULID}:circuit:*`, etc.
+- **Unique consumer groups:** `test-{ULID}-{testName}`
+- **Auto-cleanup:** Topics and keys deleted via `t.Cleanup()`
+
+**Basic usage:**
+
+```go
+//go:build integration
+
+func TestMyFeature(t *testing.T) {
+    env := testutil.NewIsolatedEnv(t)
+    
+    // env.Config has isolated topics and consumer group
+    // env.Broker is a ready-to-use Kafka broker
+    // env.HotState uses prefixed Redis keys
+    
+    worker := worker.NewWorker(env.Config, env.Broker, pub, env.HotState, ...)
+}
+```
+
+**With custom options:**
+
+```go
+func TestWithCustomCB(t *testing.T) {
+    env := testutil.NewIsolatedEnv(t,
+        testutil.WithCircuitBreakerConfig(config.CircuitBreakerConfig{
+            FailureThreshold: 3,
+            FailureWindow:    10 * time.Second,
+        }),
+    )
+    // ...
+}
+```
+
+**Environment variables for CI/debugging:**
+
+```bash
+# Override topic prefix for readable CI logs
+TEST_TOPIC_PREFIX=ci-job-123-
+# Results in topics: ci-job-123-howk.pending, etc.
+
+# Override Redis key prefix
+TEST_KEY_PREFIX=ci:build:123:
+# Results in keys: ci:build:123:status:*, etc.
+```
+
 ### Test Environment Variables
 
 ```bash
 TEST_REDIS_ADDR=localhost:6380      # Default for Docker Redis
 TEST_KAFKA_BROKERS=localhost:19092  # Default for Docker Kafka
+TEST_TOPIC_PREFIX=                  # Optional: override auto-generated topic prefix
+TEST_KEY_PREFIX=                    # Optional: override auto-generated Redis key prefix
 ```
 
 ## Configuration
@@ -495,4 +547,5 @@ make test-stats
 2. **Redpanda upgrade**: Use `make infra-clean` when upgrading Redpanda versions
 3. **Lua disabled**: Scripts are disabled by default, must set `HOWK_LUA_ENABLED=true`
 4. **Consumer groups**: Tests use unique consumer groups to avoid cross-test interference
-5. **Test isolation**: Always clean up Redis keys in integration tests
+5. **Test isolation**: Use `testutil.NewIsolatedEnv(t)` for automatic topic/key isolation
+6. **Parallel tests**: Integration tests now run in parallel by default (no `-p 1` needed)
