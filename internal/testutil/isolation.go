@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/hotstate"
@@ -31,6 +32,10 @@ type IsolatedEnv struct {
 
 	// HotState is a ready-to-use Redis hot state with isolated key prefix.
 	HotState hotstate.HotState
+
+	// Redis provides direct access to Redis with automatic key prefixing.
+	// Use this for test assertions that need direct Redis access.
+	Redis *PrefixedRedis
 
 	// TopicPrefix is the unique prefix applied to all topics (e.g., "test-01J5X7...")
 	TopicPrefix string
@@ -231,6 +236,7 @@ func NewIsolatedEnv(t *testing.T, opts ...IsolatedEnvOption) *IsolatedEnv {
 		Config:      cfg,
 		Broker:      b,
 		HotState:    prefixedHotState,
+		Redis:       NewPrefixedRedis(innerHotState.Client(), keyPrefix),
 		TopicPrefix: topicPrefix,
 		KeyPrefix:   keyPrefix,
 	}

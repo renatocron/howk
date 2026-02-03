@@ -171,6 +171,7 @@ func TestMyFeature(t *testing.T) {
     // env.Config has isolated topics and consumer group
     // env.Broker is a ready-to-use Kafka broker
     // env.HotState uses prefixed Redis keys
+    // env.Redis provides direct Redis access with prefix applied
     
     worker := worker.NewWorker(env.Config, env.Broker, pub, env.HotState, ...)
 }
@@ -187,6 +188,18 @@ func TestWithCustomCB(t *testing.T) {
         }),
     )
     // ...
+}
+```
+
+**Direct Redis access with prefix:**
+
+```go
+func TestWithDirectRedis(t *testing.T) {
+    env := testutil.NewIsolatedEnv(t)
+    
+    // env.Redis automatically applies the key prefix
+    count, err := env.Redis.ZCount(ctx, "retries", "-inf", "+inf").Result()
+    // This queries "test:{ULID}:retries" internally
 }
 ```
 
@@ -548,4 +561,4 @@ make test-stats
 3. **Lua disabled**: Scripts are disabled by default, must set `HOWK_LUA_ENABLED=true`
 4. **Consumer groups**: Tests use unique consumer groups to avoid cross-test interference
 5. **Test isolation**: Use `testutil.NewIsolatedEnv(t)` for automatic topic/key isolation
-6. **Parallel tests**: Integration tests now run in parallel by default (no `-p 1` needed)
+6. **Parallel tests**: Integration tests now run in parallel without `-p 1`

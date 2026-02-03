@@ -14,7 +14,8 @@ import (
 )
 
 func TestSetStatus_GetStatus(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	status := &domain.WebhookStatus{
@@ -34,7 +35,8 @@ func TestSetStatus_GetStatus(t *testing.T) {
 }
 
 func TestScheduleRetry_PopAndLockRetries(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	webhook := testutil.NewTestWebhook("http://example.com/retry")
@@ -82,7 +84,8 @@ func TestScheduleRetry_PopAndLockRetries(t *testing.T) {
 }
 
 func TestPopAndLockRetries_OnlyDue(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	// Schedule one in the past (due), one in the future (not due)
@@ -109,7 +112,8 @@ func TestPopAndLockRetries_OnlyDue(t *testing.T) {
 	require.NoError(t, err)
 
 	// The future one should still be there (in the queue, locked score in future)
-	count, err := hs.Client().ZCount(ctx, "retries", "-inf", "+inf").Result()
+	// Use env.Redis for direct Redis access with prefix applied
+	count, err := env.Redis.ZCount(ctx, "retries", "-inf", "+inf").Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)
 
@@ -119,7 +123,8 @@ func TestPopAndLockRetries_OnlyDue(t *testing.T) {
 }
 
 func TestPopAndLockRetries_BatchSize(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	webhooks := make([]*domain.Webhook, 5)
@@ -137,7 +142,8 @@ func TestPopAndLockRetries_BatchSize(t *testing.T) {
 
 	// The remaining 2 should still be in the queue but with locked scores (in the future)
 	// ZCount returns ALL items, including locked ones
-	count, err := hs.Client().ZCount(ctx, "retries", "-inf", "+inf").Result()
+	// Use env.Redis for direct Redis access with prefix applied
+	count, err := env.Redis.ZCount(ctx, "retries", "-inf", "+inf").Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), count) // All 5 still in queue (3 locked, 2 pending)
 
@@ -146,12 +152,13 @@ func TestPopAndLockRetries_BatchSize(t *testing.T) {
 		hs.DeleteRetryData(ctx, wh.ID)
 	}
 
-	// Clean up the retry queue
-	hs.Client().Del(ctx, "retries")
+	// Clean up the retry queue using prefixed Redis
+	env.Redis.Del(ctx, "retries")
 }
 
 func TestRetryDataLifecycle(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	webhook := testutil.NewTestWebhook("http://example.com/lifecycle")
@@ -192,7 +199,8 @@ func TestRetryDataLifecycle(t *testing.T) {
 }
 
 func TestIncrStats_GetStats(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	now := time.Now().Truncate(time.Hour)
@@ -229,7 +237,8 @@ func TestIncrStats_GetStats(t *testing.T) {
 }
 
 func TestAddToHLL_GetStats(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	now := time.Now().Truncate(time.Hour)
@@ -247,7 +256,8 @@ func TestAddToHLL_GetStats(t *testing.T) {
 }
 
 func TestCheckAndSetProcessed_First(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	webhookID := domain.WebhookID("processed-webhook-first")
@@ -258,14 +268,15 @@ func TestCheckAndSetProcessed_First(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, set) // Should be set successfully
 
-	// Verify it exists in Redis
-	val, err := hs.Client().Get(ctx, "processed:processed-webhook-first:1").Result()
+	// Verify it exists in Redis using prefixed Redis client
+	val, err := env.Redis.Get(ctx, "processed:processed-webhook-first:1").Result()
 	require.NoError(t, err)
 	assert.Equal(t, "1", val)
 }
 
 func TestCheckAndSetProcessed_Duplicate(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	webhookID := domain.WebhookID("processed-webhook-duplicate")
@@ -284,7 +295,8 @@ func TestCheckAndSetProcessed_Duplicate(t *testing.T) {
 }
 
 func TestCheckAndSetProcessed_TTL(t *testing.T) {
-	hs := testutil.SetupRedis(t)
+	env := testutil.NewIsolatedEnv(t)
+	hs := env.HotState
 	ctx := context.Background()
 
 	webhookID := domain.WebhookID("processed-webhook-ttl")

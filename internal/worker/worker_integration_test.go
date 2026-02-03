@@ -28,28 +28,31 @@ import (
 	"github.com/howk/howk/internal/worker"
 )
 
-func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker, *broker.KafkaBroker, *hotstate.RedisHotState, context.Context, context.CancelFunc) {
-	cfg := config.DefaultConfig()
-	cfg.CircuitBreaker.RecoveryTimeout = 100 * time.Millisecond
-	cfg.CircuitBreaker.FailureThreshold = 3
-	cfg.Delivery.Timeout = 2 * time.Second
-	// Use unique consumer group for each test to avoid processing other tests' messages
-	cfg.Kafka.ConsumerGroup = cfg.Kafka.ConsumerGroup + "-" + t.Name()
+func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker, *broker.KafkaBroker, hotstate.HotState, *testutil.IsolatedEnv, context.Context, context.CancelFunc) {
+	env := testutil.NewIsolatedEnv(t,
+		testutil.WithCircuitBreakerConfig(config.CircuitBreakerConfig{
+			FailureThreshold: 3,
+			FailureWindow:    60 * time.Second,
+			RecoveryTimeout:  100 * time.Millisecond,
+			ProbeInterval:    60 * time.Second,
+			SuccessThreshold: 2,
+		}),
+	)
 
-	hs := testutil.SetupRedisWithCircuitConfig(t, cfg.CircuitBreaker)
-	b := testutil.SetupKafka(t)
+	// Override delivery timeout for faster tests
+	env.Config.Delivery.Timeout = 2 * time.Second
 
-	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	dc := delivery.NewClient(cfg.Delivery)
-	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
+	pub := broker.NewKafkaWebhookPublisher(env.Broker, env.Config.Kafka.Topics)
+	dc := delivery.NewClient(env.Config.Delivery)
+	rs := retry.NewStrategy(env.Config.Retry)
+	se := script.NewEngine(env.Config.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
-	w := worker.NewWorker(cfg, b, pub, hs, dc, rs, se)
+	w := worker.NewWorker(env.Config, env.Broker, pub, env.HotState, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 
-	return w, b, hs, ctx, cancel
+	return w, env.Broker, env.HotState, env, ctx, cancel
 }
 
 func TestWorker_SuccessfulDelivery(t *testing.T) {
@@ -69,7 +72,7 @@ func TestWorker_SuccessfulDelivery(t *testing.T) {
 	}))
 	defer server.Close()
 
-	w, b, _, ctx, cancel := setupWorkerTest(t, server)
+	w, b, _, env, ctx, cancel := setupWorkerTest(t, server)
 	defer cancel()
 
 	// Create webhook
@@ -95,9 +98,8 @@ func TestWorker_SuccessfulDelivery(t *testing.T) {
 		Value: data,
 	}
 
-	// Use the same broker instance that the worker is using
-	cfg := config.DefaultConfig()
-	err = b.Publish(ctx, cfg.Kafka.Topics.Pending, msg)
+	// Publish to the isolated topic
+	err = b.Publish(ctx, env.Config.Kafka.Topics.Pending, msg)
 	require.NoError(t, err)
 
 	// Wait for delivery
@@ -126,7 +128,7 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	w, b, hs, ctx, cancel := setupWorkerTest(t, server)
+	w, b, hs, env, ctx, cancel := setupWorkerTest(t, server)
 	defer cancel()
 
 	// Create webhook
@@ -143,9 +145,7 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 	// Wait for worker to start consuming
 	time.Sleep(2 * time.Second)
 
-	// Publish webhook using the same broker instance
-	cfg := config.DefaultConfig()
-
+	// Publish webhook
 	data, err := json.Marshal(webhook)
 	require.NoError(t, err)
 
@@ -154,7 +154,7 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 		Value: data,
 	}
 
-	err = b.Publish(ctx, cfg.Kafka.Topics.Pending, msg)
+	err = b.Publish(ctx, env.Config.Kafka.Topics.Pending, msg)
 	require.NoError(t, err)
 
 	// Wait for first delivery attempt
@@ -165,8 +165,8 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 	// Wait for retry to be scheduled
 	time.Sleep(500 * time.Millisecond)
 
-	// Check that there's a retry scheduled (look at ZSET directly)
-	count, err := hs.Client().ZCount(ctx, "retries", "-inf", "+inf").Result()
+	// Check that there's a retry scheduled using prefixed Redis
+	count, err := env.Redis.ZCount(ctx, "retries", "-inf", "+inf").Result()
 	require.NoError(t, err)
 
 	// The retry might not be due yet (depends on retry delay)
@@ -183,22 +183,25 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := config.DefaultConfig()
-	cfg.CircuitBreaker.FailureThreshold = 3
-	cfg.CircuitBreaker.FailureWindow = 10 * time.Second
-	cfg.Retry.BaseDelay = 100 * time.Millisecond
-	// Use unique consumer group for this test
-	cfg.Kafka.ConsumerGroup = cfg.Kafka.ConsumerGroup + "-" + t.Name()
+	env := testutil.NewIsolatedEnv(t,
+		testutil.WithCircuitBreakerConfig(config.CircuitBreakerConfig{
+			FailureThreshold: 3,
+			FailureWindow:    10 * time.Second,
+			RecoveryTimeout:  5 * time.Minute,
+			ProbeInterval:    60 * time.Second,
+			SuccessThreshold: 2,
+		}),
+	)
 
-	hs := testutil.SetupRedisWithCircuitConfig(t, cfg.CircuitBreaker)
-	b := testutil.SetupKafka(t)
+	// Override retry delay for faster tests
+	env.Config.Retry.BaseDelay = 100 * time.Millisecond
 
-	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	dc := delivery.NewClient(cfg.Delivery)
-	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
+	pub := broker.NewKafkaWebhookPublisher(env.Broker, env.Config.Kafka.Topics)
+	dc := delivery.NewClient(env.Config.Delivery)
+	rs := retry.NewStrategy(env.Config.Retry)
+	se := script.NewEngine(env.Config.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
-	w := worker.NewWorker(cfg, b, pub, hs, dc, rs, se)
+	w := worker.NewWorker(env.Config, env.Broker, pub, env.HotState, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -231,7 +234,7 @@ func TestWorker_CircuitOpens(t *testing.T) {
 			Value: data,
 		}
 
-		err = b.Publish(ctx, cfg.Kafka.Topics.Pending, msg)
+		err = env.Broker.Publish(ctx, env.Config.Kafka.Topics.Pending, msg)
 		require.NoError(t, err)
 
 		time.Sleep(200 * time.Millisecond) // Wait between deliveries
@@ -243,7 +246,7 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	})
 
 	// Check circuit breaker state
-	circuitBreaker, err := hs.CircuitBreaker().Get(ctx, webhook.EndpointHash)
+	circuitBreaker, err := env.HotState.CircuitBreaker().Get(ctx, webhook.EndpointHash)
 	require.NoError(t, err)
 
 	// Circuit should be open after 3 failures
@@ -259,7 +262,7 @@ func TestWorker_Idempotency(t *testing.T) {
 	}))
 	defer server.Close()
 
-	w, b, _, ctx, cancel := setupWorkerTest(t, server)
+	w, b, _, env, ctx, cancel := setupWorkerTest(t, server)
 	defer cancel()
 
 	// Create webhook
@@ -276,9 +279,7 @@ func TestWorker_Idempotency(t *testing.T) {
 	// Wait for worker to start consuming
 	time.Sleep(2 * time.Second)
 
-	// Publish same webhook twice (duplicate) using the same broker instance
-	cfg := config.DefaultConfig()
-
+	// Publish same webhook twice (duplicate)
 	data, err := json.Marshal(webhook)
 	require.NoError(t, err)
 
@@ -288,7 +289,7 @@ func TestWorker_Idempotency(t *testing.T) {
 	}
 
 	// Publish first time
-	err = b.Publish(ctx, cfg.Kafka.Topics.Pending, msg)
+	err = b.Publish(ctx, env.Config.Kafka.Topics.Pending, msg)
 	require.NoError(t, err)
 
 	// Wait for first delivery
@@ -299,7 +300,7 @@ func TestWorker_Idempotency(t *testing.T) {
 	firstCount := callCount.Load()
 
 	// Publish second time (duplicate)
-	err = b.Publish(ctx, cfg.Kafka.Topics.Pending, msg)
+	err = b.Publish(ctx, env.Config.Kafka.Topics.Pending, msg)
 	require.NoError(t, err)
 
 	// Wait a bit
@@ -318,21 +319,26 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := config.DefaultConfig()
-	cfg.Retry.MaxAttempts = 2 // Only 2 attempts for faster testing
-	cfg.Retry.BaseDelay = 100 * time.Millisecond
-	// Use unique consumer group for this test
-	cfg.Kafka.ConsumerGroup = cfg.Kafka.ConsumerGroup + "-" + t.Name()
+	env := testutil.NewIsolatedEnv(t,
+		testutil.WithCircuitBreakerConfig(config.CircuitBreakerConfig{
+			FailureThreshold: 5,
+			FailureWindow:    60 * time.Second,
+			RecoveryTimeout:  5 * time.Minute,
+			ProbeInterval:    60 * time.Second,
+			SuccessThreshold: 2,
+		}),
+	)
 
-	hs := testutil.SetupRedis(t)
-	b := testutil.SetupKafka(t)
+	// Override retry config for faster tests
+	env.Config.Retry.MaxAttempts = 2 // Only 2 attempts for faster testing
+	env.Config.Retry.BaseDelay = 100 * time.Millisecond
 
-	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	dc := delivery.NewClient(cfg.Delivery)
-	rs := retry.NewStrategy(cfg.Retry)
-	se := script.NewEngine(cfg.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
+	pub := broker.NewKafkaWebhookPublisher(env.Broker, env.Config.Kafka.Topics)
+	dc := delivery.NewClient(env.Config.Delivery)
+	rs := retry.NewStrategy(env.Config.Retry)
+	se := script.NewEngine(env.Config.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
-	w := worker.NewWorker(cfg, b, pub, hs, dc, rs, se)
+	w := worker.NewWorker(env.Config, env.Broker, pub, env.HotState, dc, rs, se)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -350,7 +356,7 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 
 	// Create webhook with attempt already at max-1
 	webhook := testutil.NewTestWebhook(server.URL)
-	webhook.Attempt = cfg.Retry.MaxAttempts - 1
+	webhook.Attempt = env.Config.Retry.MaxAttempts - 1
 
 	data, err := json.Marshal(webhook)
 	require.NoError(t, err)
@@ -360,7 +366,7 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 		Value: data,
 	}
 
-	err = b.Publish(ctx, cfg.Kafka.Topics.Pending, msg)
+	err = env.Broker.Publish(ctx, env.Config.Kafka.Topics.Pending, msg)
 	require.NoError(t, err)
 
 	// Wait for delivery
@@ -372,7 +378,7 @@ func TestWorker_ExhaustedRetries(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// Check status - should be exhausted
-	status, err := hs.GetStatus(ctx, webhook.ID)
+	status, err := env.HotState.GetStatus(ctx, webhook.ID)
 	require.NoError(t, err)
 
 	if status != nil {

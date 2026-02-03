@@ -20,41 +20,34 @@ import (
 	"github.com/howk/howk/internal/testutil"
 )
 
-func setupSchedulerTest(t *testing.T) (*scheduler.Scheduler, *hotstate.RedisHotState, *broker.KafkaBroker, context.Context, context.CancelFunc) {
-	cfg := config.DefaultConfig()
-	cfg.Scheduler.PollInterval = 500 * time.Millisecond // Fast polling for tests
-	cfg.Scheduler.BatchSize = 10
+func setupSchedulerTest(t *testing.T) (*scheduler.Scheduler, hotstate.HotState, *broker.KafkaBroker, *testutil.IsolatedEnv, context.Context, context.CancelFunc) {
+	env := testutil.NewIsolatedEnv(t,
+		testutil.WithSchedulerConfig(config.SchedulerConfig{
+			PollInterval: 500 * time.Millisecond,
+			BatchSize:    10,
+			LockTimeout:  30 * time.Second,
+		}),
+	)
 
-	hs := testutil.SetupRedis(t)
-	b := testutil.SetupKafka(t)
-
-	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	s := scheduler.NewScheduler(cfg.Scheduler, hs, pub)
+	pub := broker.NewKafkaWebhookPublisher(env.Broker, env.Config.Kafka.Topics)
+	s := scheduler.NewScheduler(env.Config.Scheduler, env.HotState, pub)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	// Register cancel in cleanup so it runs before Redis flush (LIFO order —
-	// this was registered after SetupRedis, so it runs first during cleanup)
 	t.Cleanup(func() {
 		cancel()
 		// Give scheduler goroutine time to observe cancellation and exit
 		time.Sleep(200 * time.Millisecond)
 	})
 
-	return s, hs, b, ctx, cancel
+	return s, env.HotState, env.Broker, env, ctx, cancel
 }
 
 func TestScheduler_PopAndLockRetries(t *testing.T) {
-	s, hs, b, ctx, cancel := setupSchedulerTest(t)
+	s, hs, b, env, ctx, cancel := setupSchedulerTest(t)
 	defer cancel()
 
-	// Create unique topic for this test
-	topic := "test-pending-" + ulid.Make().String()
-
-	// Update publisher to use test topic
-	cfg := config.DefaultConfig()
-	cfg.Kafka.Topics.Pending = topic
-	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	s = scheduler.NewScheduler(cfg.Scheduler, hs, pub)
+	// Use the isolated topic from env
+	topic := env.Config.Kafka.Topics.Pending
 
 	// Channel to receive published webhooks
 	received := make(chan *broker.Message, 10)
@@ -109,17 +102,11 @@ func TestScheduler_PopAndLockRetries(t *testing.T) {
 }
 
 func TestScheduler_NotDueYet(t *testing.T) {
-	s, hs, b, ctx, cancel := setupSchedulerTest(t)
+	s, hs, b, env, ctx, cancel := setupSchedulerTest(t)
 	defer cancel()
 
-	// Create unique topic for this test
-	topic := "test-pending-" + ulid.Make().String()
-
-	// Update publisher to use test topic
-	cfg := config.DefaultConfig()
-	cfg.Kafka.Topics.Pending = topic
-	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	s = scheduler.NewScheduler(cfg.Scheduler, hs, pub)
+	// Use the isolated topic from env
+	topic := env.Config.Kafka.Topics.Pending
 
 	// Channel to receive published webhooks
 	received := make(chan *broker.Message, 10)
@@ -174,18 +161,28 @@ func TestScheduler_NotDueYet(t *testing.T) {
 }
 
 func TestScheduler_ReEnqueueToKafka(t *testing.T) {
-	s, hs, b, ctx, cancel := setupSchedulerTest(t)
+	env := testutil.NewIsolatedEnv(t,
+		testutil.WithSchedulerConfig(config.SchedulerConfig{
+			PollInterval: 100 * time.Millisecond,
+			BatchSize:    500,
+			LockTimeout:  30 * time.Second,
+		}),
+	)
+
+	pub := broker.NewKafkaWebhookPublisher(env.Broker, env.Config.Kafka.Topics)
+	s := scheduler.NewScheduler(env.Config.Scheduler, env.HotState, pub)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create unique topic for this test
-	topic := "test-pending-" + ulid.Make().String()
+	t.Cleanup(func() {
+		cancel()
+		time.Sleep(200 * time.Millisecond)
+	})
 
-	// Update publisher to use test topic
-	cfg := config.DefaultConfig()
-	cfg.Kafka.Topics.Pending = topic
-	cfg.Scheduler.PollInterval = 100 * time.Millisecond
-	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	s = scheduler.NewScheduler(cfg.Scheduler, hs, pub)
+	hs := env.HotState
+	b := env.Broker
+	topic := env.Config.Kafka.Topics.Pending
 
 	// Channel to receive published webhooks
 	received := make(chan *broker.Message, 10)
@@ -251,19 +248,28 @@ func TestScheduler_ReEnqueueToKafka(t *testing.T) {
 }
 
 func TestScheduler_BatchSizeLimit(t *testing.T) {
-	s, hs, b, ctx, cancel := setupSchedulerTest(t)
+	env := testutil.NewIsolatedEnv(t,
+		testutil.WithSchedulerConfig(config.SchedulerConfig{
+			PollInterval: 100 * time.Millisecond,
+			BatchSize:    5, // Small batch size
+			LockTimeout:  30 * time.Second,
+		}),
+	)
+
+	pub := broker.NewKafkaWebhookPublisher(env.Broker, env.Config.Kafka.Topics)
+	s := scheduler.NewScheduler(env.Config.Scheduler, env.HotState, pub)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create unique topic for this test
-	topic := "test-pending-" + ulid.Make().String()
+	t.Cleanup(func() {
+		cancel()
+		time.Sleep(200 * time.Millisecond)
+	})
 
-	// Update publisher to use test topic with small batch size
-	cfg := config.DefaultConfig()
-	cfg.Kafka.Topics.Pending = topic
-	cfg.Scheduler.PollInterval = 100 * time.Millisecond
-	cfg.Scheduler.BatchSize = 5 // Small batch size
-	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
-	s = scheduler.NewScheduler(cfg.Scheduler, hs, pub)
+	hs := env.HotState
+	b := env.Broker
+	topic := env.Config.Kafka.Topics.Pending
 
 	// Channel to receive published webhooks
 	received := make(chan *broker.Message, 20)
