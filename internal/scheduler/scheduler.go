@@ -43,6 +43,12 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		Dur("lock_timeout", s.config.LockTimeout).
 		Msg("Scheduler starting...")
 
+	// Check system epoch on startup
+	if err := s.checkSystemHealth(ctx); err != nil {
+		log.Warn().Err(err).Msg("System health check failed")
+		// Continue anyway - don't block scheduler startup
+	}
+
 	ticker := time.NewTicker(s.config.PollInterval)
 	defer ticker.Stop()
 
@@ -148,4 +154,32 @@ func parseReference(ref string) (domain.WebhookID, int, error) {
 		return "", 0, fmt.Errorf("invalid attempt number in reference %s: %w", ref, err)
 	}
 	return domain.WebhookID(parts[0]), attempt, nil
+}
+
+// checkSystemHealth checks the system epoch on startup to detect potential data loss
+func (s *Scheduler) checkSystemHealth(ctx context.Context) error {
+	epoch, err := s.hotstate.GetEpoch(ctx)
+	if err != nil {
+		return fmt.Errorf("get epoch: %w", err)
+	}
+
+	if epoch == nil {
+		log.Warn().Msg("No system epoch found - Redis may have been flushed. Consider running reconciler.")
+		return nil
+	}
+
+	age := time.Since(epoch.CompletedAt)
+	if age > 24*time.Hour {
+		log.Warn().
+			Time("epoch_completed_at", epoch.CompletedAt).
+			Dur("age", age).
+			Msg("System epoch is old - consider running reconciler if Redis was restored from backup")
+	} else {
+		log.Info().
+			Time("epoch_completed_at", epoch.CompletedAt).
+			Int64("messages_replayed", epoch.MessagesReplayed).
+			Msg("System epoch valid")
+	}
+
+	return nil
 }

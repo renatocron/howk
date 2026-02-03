@@ -1,4 +1,4 @@
-.PHONY: all build run-api run-worker run-scheduler test clean deps infra infra-down test-coverage-ci
+.PHONY: all build run-api run-worker run-scheduler test clean deps infra infra-down test-coverage-ci check-infra
 
 # Build all binaries
 all: build
@@ -75,8 +75,25 @@ test-coverage:
 	@echo "Coverage report: coverage.html"
 	@go tool cover -func=coverage.out | grep total
 
-# Combined coverage for CI (unit + integration, requires infrastructure)
-test-coverage-ci:
+# Check if infrastructure is running (Kafka on 19092, Redis on 6380)
+check-infra:
+	@echo "Checking infrastructure..."
+	@if ! nc -z localhost 19092 2>/dev/null; then \
+		echo "Kafka not running on port 19092. Starting infrastructure..."; \
+		$(MAKE) infra; \
+		echo "Waiting for services to be ready..."; \
+		sleep 15; \
+	elif ! nc -z localhost 6380 2>/dev/null; then \
+		echo "Redis not running on port 6380. Starting infrastructure..."; \
+		$(MAKE) infra; \
+		echo "Waiting for services to be ready..."; \
+		sleep 15; \
+	else \
+		echo "Infrastructure is already running!"; \
+	fi
+
+# Combined coverage for CI (unit + integration, auto-starts infrastructure if needed)
+test-coverage-ci: check-infra
 	go test -race -coverprofile=coverage.out -coverpkg=./... -count=1 -p 1 -tags=integration -timeout=10m ./...
 	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html

@@ -166,3 +166,12 @@ type DeadLetter struct {
 	StatusCode   int              `json:"status_code,omitempty"`
 	Time         time.Time        `json:"time"`
 }
+
+// SystemEpoch tracks when Redis state was last reconciled
+// Used to detect potential Redis data loss on startup
+type SystemEpoch struct {
+	Epoch            int64     `json:"epoch"`
+	ReconcilerHost   string    `json:"reconciler_host"`
+	MessagesReplayed int64     `json:"messages_replayed"`
+	CompletedAt      time.Time `json:"completed_at"`
+}

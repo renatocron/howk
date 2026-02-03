@@ -59,9 +59,9 @@ func NewServer(
 
 func (s *Server) setupRoutes() {
 	// Health endpoints
-	s.router.GET("/health", s.healthCheck)
+	s.router.GET("/health", s.handleHealth)
 	s.router.GET("/ready", s.readyCheck)
-	s.router.GET("/health/dependencies", s.dependenciesCheck) // Add this
+	s.router.GET("/health/dependencies", s.dependenciesCheck)
 
 	// Webhook endpoints
 	webhooks := s.router.Group("/webhooks")
@@ -157,10 +157,6 @@ type StatsResponse struct {
 }
 
 // --- Handlers ---
-
-func (s *Server) healthCheck(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
 
 func (s *Server) readyCheck(c *gin.Context) {
 	// Check Redis connectivity

@@ -65,6 +65,14 @@ type HotState interface {
 	// DecrInflight atomically decrements the in-flight counter for an endpoint.
 	// Uses a Lua script to ensure the counter never goes below zero.
 	DecrInflight(ctx context.Context, endpointHash domain.EndpointHash) error
+
+	// SystemEpoch operations
+	// GetEpoch retrieves the system epoch marker from Redis
+	GetEpoch(ctx context.Context) (*domain.SystemEpoch, error)
+	// SetEpoch sets the system epoch marker in Redis
+	SetEpoch(ctx context.Context, epoch *domain.SystemEpoch) error
+	// GetRetryQueueSize returns the current size of the retry queue
+	GetRetryQueueSize(ctx context.Context) (int64, error)
 }
 
 // CircuitBreakerChecker provides circuit breaker functionality

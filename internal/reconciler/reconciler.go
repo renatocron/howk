@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -143,6 +144,20 @@ func (r *Reconciler) Run(ctx context.Context, fromBeginning bool) error {
 		Int64("total_processed", processedCount).
 		Dur("duration", time.Since(startTime)).
 		Msg("Reconciliation complete")
+
+	// Set epoch marker after successful completion
+	hostname, _ := os.Hostname()
+	epoch := &domain.SystemEpoch{
+		Epoch:            time.Now().Unix(),
+		ReconcilerHost:   hostname,
+		MessagesReplayed: processedCount,
+		CompletedAt:      time.Now(),
+	}
+
+	if err := r.hotstate.SetEpoch(ctx, epoch); err != nil {
+		log.Error().Err(err).Msg("Failed to set epoch marker")
+		// Don't fail reconciliation for this
+	}
 
 	return nil
 }

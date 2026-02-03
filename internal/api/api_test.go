@@ -259,16 +259,20 @@ func TestGetStatus_Error(t *testing.T) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	server, _, _, _, _ := setupTestServer(t)
+	server, _, mockHS, _, _ := setupTestServer(t)
+
+	mockHS.On("Ping", mock.Anything).Return(nil)
+	mockHS.On("GetEpoch", mock.Anything).Return(nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/health", nil)
 
-	server.healthCheck(c)
+	server.handleHealth(c)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "ok")
+	assert.Contains(t, w.Body.String(), "healthy")
+	mockHS.AssertExpectations(t)
 }
 
 func TestReadyCheck_Healthy(t *testing.T) {

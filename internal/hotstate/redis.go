@@ -24,6 +24,7 @@ const (
 	circuitStatePrefix = "circuit:"
 	scriptPrefix       = "script:"
 	concurrencyPrefix  = "concurrency:"
+	systemEpochKey     = "howk:system:epoch"
 )
 
 // RedisHotState implements HotState using Redis
@@ -706,4 +707,37 @@ func (r *RedisHotState) DecrInflight(ctx context.Context, endpointHash domain.En
 		return fmt.Errorf("decr inflight: %w", err)
 	}
 	return nil
+}
+
+// --- System Epoch Operations ---
+
+// GetEpoch retrieves the system epoch marker from Redis
+func (r *RedisHotState) GetEpoch(ctx context.Context) (*domain.SystemEpoch, error) {
+	data, err := r.rdb.Get(ctx, systemEpochKey).Bytes()
+	if err == redis.Nil {
+		return nil, nil // No epoch set yet
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get epoch: %w", err)
+	}
+
+	var epoch domain.SystemEpoch
+	if err := json.Unmarshal(data, &epoch); err != nil {
+		return nil, fmt.Errorf("unmarshal epoch: %w", err)
+	}
+	return &epoch, nil
+}
+
+// SetEpoch sets the system epoch marker in Redis
+func (r *RedisHotState) SetEpoch(ctx context.Context, epoch *domain.SystemEpoch) error {
+	data, err := json.Marshal(epoch)
+	if err != nil {
+		return fmt.Errorf("marshal epoch: %w", err)
+	}
+	return r.rdb.Set(ctx, systemEpochKey, data, 0).Err()
+}
+
+// GetRetryQueueSize returns the current size of the retry queue
+func (r *RedisHotState) GetRetryQueueSize(ctx context.Context) (int64, error) {
+	return r.rdb.ZCard(ctx, retryQueue).Result()
 }

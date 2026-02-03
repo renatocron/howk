@@ -555,9 +555,10 @@ func TestWorker_ProcessMessage_RetrySchedulingError(t *testing.T) {
 	// Publish result
 	mockPublisher.On("PublishResult", mock.Anything, mock.Anything).Return(nil)
 
-	// Should complete despite retry scheduling failure (logs error)
+	// Now returns error to NACK message and trigger redelivery (creates backpressure)
 	err := w.ProcessMessage(context.Background(), msg)
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "schedule retry")
 }
 
 // TestWorker_ProcessMessage_ProbeRequest tests handling of probe requests when circuit is half-open

@@ -277,13 +277,18 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 		webhook.ScheduledAt = nextRetryAt
 
 		if err := w.scheduleRetry(ctx, &webhook, nextRetryAt, fmt.Sprintf("status=%d, error=%s", result.StatusCode, deliveryResult.Error)); err != nil {
-			logger.Error().Err(err).Msg("Failed to schedule retry")
-		} else {
-			logger.Info().
-				Time("next_retry_at", nextRetryAt).
-				Str("circuit_state", string(circuitState)).
-				Msg("Retry scheduled")
+			// Return error to NACK message and trigger redelivery
+			// This creates backpressure when Redis is down
+			// Note: If delivery succeeded before this failure, that retry may be lost
+			// (idempotency will skip on redelivery) - reconciler handles this edge case
+			logger.Error().Err(err).Msg("Failed to schedule retry, will redeliver from Kafka")
+			return fmt.Errorf("schedule retry: %w", err)
 		}
+
+		logger.Info().
+			Time("next_retry_at", nextRetryAt).
+			Str("circuit_state", string(circuitState)).
+			Msg("Retry scheduled")
 
 		// Update status
 		w.updateStatus(ctx, &webhook, domain.StateFailed, deliveryResult)
@@ -361,7 +366,10 @@ func (w *Worker) scheduleRetryForCircuit(ctx context.Context, webhook *domain.We
 	nextRetryAt := w.retry.NextRetryAt(webhook.Attempt, circuitState)
 	webhook.ScheduledAt = nextRetryAt
 
-	return w.scheduleRetry(ctx, webhook, nextRetryAt, "circuit_open")
+	if err := w.scheduleRetry(ctx, webhook, nextRetryAt, "circuit_open"); err != nil {
+		return fmt.Errorf("schedule retry for circuit: %w", err)
+	}
+	return nil
 }
 
 func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, state string, result *domain.DeliveryResult) {
@@ -450,7 +458,9 @@ func (w *Worker) handleScriptError(ctx context.Context, webhook *domain.Webhook,
 		webhook.ScheduledAt = nextRetryAt
 
 		if err := w.scheduleRetry(ctx, webhook, nextRetryAt, fmt.Sprintf("script_error: %s", scriptError.Type)); err != nil {
-			logger.Error().Err(err).Msg("Failed to schedule retry for script error")
+			// Return error to NACK message and trigger redelivery
+			logger.Error().Err(err).Msg("Failed to schedule retry for script error, will redeliver from Kafka")
+			return fmt.Errorf("schedule retry for script error: %w", err)
 		}
 
 		// Update status to failed

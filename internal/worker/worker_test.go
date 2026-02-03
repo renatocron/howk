@@ -236,6 +236,24 @@ func (m *MockHotState) DecrInflight(ctx context.Context, endpointHash domain.End
 	return args.Error(0)
 }
 
+func (m *MockHotState) GetEpoch(ctx context.Context) (*domain.SystemEpoch, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SystemEpoch), args.Error(1)
+}
+
+func (m *MockHotState) SetEpoch(ctx context.Context, epoch *domain.SystemEpoch) error {
+	args := m.Called(ctx, epoch)
+	return args.Error(0)
+}
+
+func (m *MockHotState) GetRetryQueueSize(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // MockDeliveryClient implements methods used by Worker from delivery.Client
 type MockDeliveryClient struct {
 	mock.Mock
