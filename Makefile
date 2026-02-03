@@ -94,7 +94,7 @@ check-infra:
 
 # Combined coverage for CI (unit + integration, auto-starts infrastructure if needed)
 test-coverage-ci: check-infra
-	go test -race -coverprofile=coverage.out -coverpkg=./... -count=1 -tags=integration -timeout=10m ./...
+	go test -race -coverprofile=coverage.out -coverpkg=./... -count=1 -p 8 -tags=integration -timeout=10m ./...
 	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
