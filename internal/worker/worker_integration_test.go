@@ -128,7 +128,7 @@ func TestWorker_RetryAfterFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	w, b, hs, env, ctx, cancel := setupWorkerTest(t, server)
+	w, b, _, env, ctx, cancel := setupWorkerTest(t, server)
 	defer cancel()
 
 	// Create webhook
