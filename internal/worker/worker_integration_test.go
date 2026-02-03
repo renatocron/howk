@@ -36,7 +36,7 @@ func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker,
 	// Use unique consumer group for each test to avoid processing other tests' messages
 	cfg.Kafka.ConsumerGroup = cfg.Kafka.ConsumerGroup + "-" + t.Name()
 
-	hs := testutil.SetupRedis(t)
+	hs := testutil.SetupRedisWithCircuitConfig(t, cfg.CircuitBreaker)
 	b := testutil.SetupKafka(t)
 
 	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
@@ -190,7 +190,7 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	// Use unique consumer group for this test
 	cfg.Kafka.ConsumerGroup = cfg.Kafka.ConsumerGroup + "-" + t.Name()
 
-	hs := testutil.SetupRedis(t)
+	hs := testutil.SetupRedisWithCircuitConfig(t, cfg.CircuitBreaker)
 	b := testutil.SetupKafka(t)
 
 	pub := broker.NewKafkaWebhookPublisher(b, cfg.Kafka.Topics)
