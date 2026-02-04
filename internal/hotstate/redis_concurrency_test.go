@@ -270,3 +270,149 @@ func TestConcurrency_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "0", val)
 }
+
+// =============================================================================
+// Unit Tests (converted from integration tests)
+// =============================================================================
+
+func TestSetStatus_GetStatus_Unit(t *testing.T) {
+	ctx := context.Background()
+	hs, s := setupMiniredis(t)
+	defer s.Close()
+
+	status := &domain.WebhookStatus{
+		WebhookID: "test-webhook-id",
+		State:     domain.StatePending,
+		Attempts:  0,
+	}
+
+	err := hs.SetStatus(ctx, status)
+	require.NoError(t, err)
+
+	gotStatus, err := hs.GetStatus(ctx, status.WebhookID)
+	require.NoError(t, err)
+	require.NotNil(t, gotStatus)
+	assert.Equal(t, status.WebhookID, gotStatus.WebhookID)
+	assert.Equal(t, status.State, gotStatus.State)
+}
+
+func TestIncrStats_GetStats_Unit(t *testing.T) {
+	ctx := context.Background()
+	hs, s := setupMiniredis(t)
+	defer s.Close()
+
+	now := time.Now().Truncate(time.Hour)
+	bucket := now.Format("2006010215") // hourly bucket
+
+	// Increment some stats
+	err := hs.IncrStats(ctx, bucket, map[string]int64{
+		"enqueued":  10,
+		"delivered": 5,
+		"failed":    3,
+	})
+	require.NoError(t, err)
+
+	err = hs.IncrStats(ctx, bucket, map[string]int64{
+		"enqueued":  5,
+		"delivered": 2,
+		"exhausted": 1,
+	})
+	require.NoError(t, err)
+
+	// Get stats for that hour
+	stats, err := hs.GetStats(ctx, now, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(15), stats.Enqueued)
+	assert.Equal(t, int64(7), stats.Delivered)
+	assert.Equal(t, int64(3), stats.Failed)
+	assert.Equal(t, int64(1), stats.Exhausted)
+
+	// Get stats for a different hour - should be 0
+	yesterday := now.Add(-24 * time.Hour)
+	stats, err = hs.GetStats(ctx, yesterday, yesterday)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), stats.Enqueued)
+}
+
+func TestAddToHLL_GetStats_Unit(t *testing.T) {
+	ctx := context.Background()
+	hs, s := setupMiniredis(t)
+	defer s.Close()
+
+	now := time.Now().Truncate(time.Hour)
+	bucket := now.Format("2006010215")
+
+	err := hs.AddToHLL(ctx, "endpoints:"+bucket, "endpoint1", "endpoint2", "endpoint1")
+	require.NoError(t, err)
+
+	err = hs.AddToHLL(ctx, "endpoints:"+bucket, "endpoint3")
+	require.NoError(t, err)
+
+	stats, err := hs.GetStats(ctx, now, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), stats.UniqueEndpoints) // endpoint1, endpoint2, endpoint3
+}
+
+func TestCheckAndSetProcessed_First_Unit(t *testing.T) {
+	ctx := context.Background()
+	hs, s := setupMiniredis(t)
+	defer s.Close()
+
+	webhookID := domain.WebhookID("processed-webhook-first")
+	attempt := 1
+	ttl := 1 * time.Hour
+
+	set, err := hs.CheckAndSetProcessed(ctx, webhookID, attempt, ttl)
+	require.NoError(t, err)
+	assert.True(t, set) // Should be set successfully
+
+	// Verify it exists in Redis
+	key := "processed:processed-webhook-first:1"
+	val, err := s.Get(key)
+	require.NoError(t, err)
+	assert.Equal(t, "1", val)
+}
+
+func TestCheckAndSetProcessed_Duplicate_Unit(t *testing.T) {
+	ctx := context.Background()
+	hs, s := setupMiniredis(t)
+	defer s.Close()
+
+	webhookID := domain.WebhookID("processed-webhook-duplicate")
+	attempt := 1
+	ttl := 1 * time.Hour
+
+	// First call should set it
+	set, err := hs.CheckAndSetProcessed(ctx, webhookID, attempt, ttl)
+	require.NoError(t, err)
+	assert.True(t, set)
+
+	// Second call should return false (already processed)
+	set, err = hs.CheckAndSetProcessed(ctx, webhookID, attempt, ttl)
+	require.NoError(t, err)
+	assert.False(t, set)
+}
+
+func TestPopAndLockRetries_BatchSize_Unit(t *testing.T) {
+	ctx := context.Background()
+	hs, s := setupMiniredis(t)
+	defer s.Close()
+
+	// Schedule 5 retries all due immediately (past time)
+	pastTime := time.Now().Add(-10 * time.Second)
+	for i := 0; i < 5; i++ {
+		webhookID := domain.WebhookID("wh_batch_" + string(rune('a'+i)))
+		err := hs.ScheduleRetry(ctx, webhookID, i, pastTime, "batch")
+		require.NoError(t, err)
+	}
+
+	// Pop only 3 (batch size limit)
+	refs, err := hs.PopAndLockRetries(ctx, 3, 30*time.Second)
+	require.NoError(t, err)
+	require.Len(t, refs, 3)
+
+	// All 5 are still in queue (3 locked with future score, 2 still due)
+	count, err := hs.rdb.ZCard(ctx, "retries").Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), count)
+}

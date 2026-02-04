@@ -18,7 +18,8 @@
       "Bash(go mod tidy:*)",
       "Bash(go get:*)",
       "Bash(pkill:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(go vet:*)"
     ]
   },
   "enabledPlugins": {

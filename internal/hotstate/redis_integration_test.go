@@ -13,27 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSetStatus_GetStatus(t *testing.T) {
-	env := testutil.NewIsolatedEnv(t)
-	hs := env.HotState
-	ctx := context.Background()
-
-	status := &domain.WebhookStatus{
-		WebhookID: "test-webhook-id",
-		State:     domain.StatePending,
-		Attempts:  0,
-	}
-
-	err := hs.SetStatus(ctx, status)
-	require.NoError(t, err)
-
-	gotStatus, err := hs.GetStatus(ctx, status.WebhookID)
-	require.NoError(t, err)
-	require.NotNil(t, gotStatus)
-	assert.Equal(t, status.WebhookID, gotStatus.WebhookID)
-	assert.Equal(t, status.State, gotStatus.State)
-}
-
 func TestScheduleRetry_PopAndLockRetries(t *testing.T) {
 	env := testutil.NewIsolatedEnv(t)
 	hs := env.HotState
@@ -122,40 +101,6 @@ func TestPopAndLockRetries_OnlyDue(t *testing.T) {
 	hs.DeleteRetryData(ctx, whFuture.ID)
 }
 
-func TestPopAndLockRetries_BatchSize(t *testing.T) {
-	env := testutil.NewIsolatedEnv(t)
-	hs := env.HotState
-	ctx := context.Background()
-
-	webhooks := make([]*domain.Webhook, 5)
-	for i := 0; i < 5; i++ {
-		webhooks[i] = testutil.NewTestWebhook("http://example.com/batch")
-		err := hs.EnsureRetryData(ctx, webhooks[i], 7*24*time.Hour)
-		require.NoError(t, err)
-		err = hs.ScheduleRetry(ctx, webhooks[i].ID, i, time.Now().Add(-10*time.Second), "batch") // All due
-		require.NoError(t, err)
-	}
-
-	refs, err := hs.PopAndLockRetries(ctx, 3, 30*time.Second)
-	require.NoError(t, err)
-	require.Len(t, refs, 3)
-
-	// The remaining 2 should still be in the queue but with locked scores (in the future)
-	// ZCount returns ALL items, including locked ones
-	// Use env.Redis for direct Redis access with prefix applied
-	count, err := env.Redis.ZCount(ctx, "retries", "-inf", "+inf").Result()
-	require.NoError(t, err)
-	assert.Equal(t, int64(5), count) // All 5 still in queue (3 locked, 2 pending)
-
-	// Cleanup remaining data
-	for _, wh := range webhooks {
-		hs.DeleteRetryData(ctx, wh.ID)
-	}
-
-	// Clean up the retry queue using prefixed Redis
-	env.Redis.Del(ctx, "retries")
-}
-
 func TestRetryDataLifecycle(t *testing.T) {
 	env := testutil.NewIsolatedEnv(t)
 	hs := env.HotState
@@ -196,102 +141,6 @@ func TestRetryDataLifecycle(t *testing.T) {
 	// 7. Data should be gone
 	_, err = hs.GetRetryData(ctx, webhook.ID)
 	assert.Error(t, err)
-}
-
-func TestIncrStats_GetStats(t *testing.T) {
-	env := testutil.NewIsolatedEnv(t)
-	hs := env.HotState
-	ctx := context.Background()
-
-	now := time.Now().Truncate(time.Hour)
-	bucket := now.Format("2006010215") // hourly bucket
-
-	// Increment some stats
-	err := hs.IncrStats(ctx, bucket, map[string]int64{
-		"enqueued":  10,
-		"delivered": 5,
-		"failed":    3,
-	})
-	require.NoError(t, err)
-
-	err = hs.IncrStats(ctx, bucket, map[string]int64{
-		"enqueued":  5,
-		"delivered": 2,
-		"exhausted": 1,
-	})
-	require.NoError(t, err)
-
-	// Get stats for that hour
-	stats, err := hs.GetStats(ctx, now, now)
-	require.NoError(t, err)
-	assert.Equal(t, int64(15), stats.Enqueued)
-	assert.Equal(t, int64(7), stats.Delivered)
-	assert.Equal(t, int64(3), stats.Failed)
-	assert.Equal(t, int64(1), stats.Exhausted)
-
-	// Get stats for a different hour - should be 0
-	yesterday := now.Add(-24 * time.Hour)
-	stats, err = hs.GetStats(ctx, yesterday, yesterday)
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), stats.Enqueued)
-}
-
-func TestAddToHLL_GetStats(t *testing.T) {
-	env := testutil.NewIsolatedEnv(t)
-	hs := env.HotState
-	ctx := context.Background()
-
-	now := time.Now().Truncate(time.Hour)
-	bucket := now.Format("2006010215")
-
-	err := hs.AddToHLL(ctx, "endpoints:"+bucket, "endpoint1", "endpoint2", "endpoint1")
-	require.NoError(t, err)
-
-	err = hs.AddToHLL(ctx, "endpoints:"+bucket, "endpoint3")
-	require.NoError(t, err)
-
-	stats, err := hs.GetStats(ctx, now, now)
-	require.NoError(t, err)
-	assert.Equal(t, int64(3), stats.UniqueEndpoints) // endpoint1, endpoint2, endpoint3
-}
-
-func TestCheckAndSetProcessed_First(t *testing.T) {
-	env := testutil.NewIsolatedEnv(t)
-	hs := env.HotState
-	ctx := context.Background()
-
-	webhookID := domain.WebhookID("processed-webhook-first")
-	attempt := 1
-	ttl := 1 * time.Hour
-
-	set, err := hs.CheckAndSetProcessed(ctx, webhookID, attempt, ttl)
-	require.NoError(t, err)
-	assert.True(t, set) // Should be set successfully
-
-	// Verify it exists in Redis using prefixed Redis client
-	val, err := env.Redis.Get(ctx, "processed:processed-webhook-first:1").Result()
-	require.NoError(t, err)
-	assert.Equal(t, "1", val)
-}
-
-func TestCheckAndSetProcessed_Duplicate(t *testing.T) {
-	env := testutil.NewIsolatedEnv(t)
-	hs := env.HotState
-	ctx := context.Background()
-
-	webhookID := domain.WebhookID("processed-webhook-duplicate")
-	attempt := 1
-	ttl := 1 * time.Hour
-
-	// First call should set it
-	set, err := hs.CheckAndSetProcessed(ctx, webhookID, attempt, ttl)
-	require.NoError(t, err)
-	assert.True(t, set)
-
-	// Second call should return false (already processed)
-	set, err = hs.CheckAndSetProcessed(ctx, webhookID, attempt, ttl)
-	require.NoError(t, err)
-	assert.False(t, set)
 }
 
 func TestCheckAndSetProcessed_TTL(t *testing.T) {

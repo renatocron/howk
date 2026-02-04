@@ -5,6 +5,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -426,4 +427,58 @@ func TestScheduler_ProcessBatch_MultipleAttempts(t *testing.T) {
 	assert.NoError(t, err)
 
 	mockPublisher.AssertExpectations(t)
+}
+
+// TestScheduler_ProcessBatch_NotDueYet tests that when no retries are due,
+// nothing is published (converted from integration test)
+func TestScheduler_ProcessBatch_NotDueYet(t *testing.T) {
+	scheduler, mockHotState, mockPublisher := setupSchedulerTest()
+
+	// PopAndLockRetries returns empty - no items are due
+	mockHotState.On("PopAndLockRetries", mock.Anything, 10, mock.Anything).
+		Return([]string{}, nil)
+
+	err := scheduler.processBatch(context.Background())
+	assert.NoError(t, err)
+
+	mockHotState.AssertExpectations(t)
+	// Verify no webhooks were published
+	mockPublisher.AssertNotCalled(t, "PublishWebhook", mock.Anything, mock.Anything)
+}
+
+// TestScheduler_ProcessBatch_BatchSizeRespected tests that processBatch handles
+// a full batch of items correctly (converted from integration test)
+func TestScheduler_ProcessBatch_BatchSizeRespected(t *testing.T) {
+	cfg := config.SchedulerConfig{
+		PollInterval: time.Second,
+		BatchSize:    5, // Small batch size
+		LockTimeout:  time.Minute,
+	}
+
+	mockHotState := new(MockHotState)
+	mockPublisher := new(MockPublisher)
+	scheduler := NewScheduler(cfg, mockHotState, mockPublisher)
+
+	// Return 5 items (matching batch size)
+	refs := []string{"wh1:1", "wh2:1", "wh3:1", "wh4:1", "wh5:1"}
+	mockHotState.On("PopAndLockRetries", mock.Anything, 5, mock.Anything).
+		Return(refs, nil)
+
+	// Mock GetRetryData and PublishWebhook for each item
+	for i := 1; i <= 5; i++ {
+		id := domain.WebhookID(fmt.Sprintf("wh%d", i))
+		wh := &domain.Webhook{ID: id, Attempt: 0}
+		mockHotState.On("GetRetryData", mock.Anything, id).Return(wh, nil)
+		mockPublisher.On("PublishWebhook", mock.Anything, mock.MatchedBy(func(w *domain.Webhook) bool {
+			return w.ID == id && w.Attempt == 1
+		})).Return(nil)
+		mockHotState.On("AckRetry", mock.Anything, fmt.Sprintf("wh%d:1", i)).Return(nil)
+	}
+
+	err := scheduler.processBatch(context.Background())
+	assert.NoError(t, err)
+
+	// Verify all 5 webhooks were published
+	mockPublisher.AssertNumberOfCalls(t, "PublishWebhook", 5)
+	mockHotState.AssertExpectations(t)
 }
