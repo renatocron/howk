@@ -34,14 +34,16 @@ test-unit:
 
 test: test-unit
 
-# Coverage packages to exclude (entry points and test utilities)
-COVERAGE_EXCLUDES := cmd/ internal/api/ internal/reconciler/ internal/testutil/
+# Coverage packages to exclude (test utilities and mocks only)
+COVERAGE_EXCLUDES := cmd/ internal/mocks/ internal/testutil/
 
 # Filter coverage file to exclude certain packages
 define filter_coverage
 	grep -v -E "$(shell echo $(COVERAGE_EXCLUDES) | tr ' ' '|')" coverage.out > coverage.filtered.out
 	mv coverage.filtered.out coverage.out
 endef
+
+
 
 # Unit test coverage
 test-unit-coverage:
@@ -92,13 +94,37 @@ check-infra:
 		echo "Infrastructure is already running!"; \
 	fi
 
-# Combined coverage for CI (unit + integration, auto-starts infrastructure if needed)
-test-coverage-ci: check-infra
-	go test -race -coverprofile=coverage.out -coverpkg=./... -count=1 -p 8 -tags=integration -timeout=10m ./...
+# Combined coverage for CI (unit + integration merged, auto-starts infrastructure if needed)
+test-coverage-ci: check-infra .ensure-gocovmerge
+	@echo "Running unit tests..."
+	go test -race -short -coverprofile=coverage_unit.out -coverpkg=./... -count=1 ./...
+	@echo "Running integration tests..."
+	go test -race -coverprofile=coverage_integration.out -coverpkg=./... -count=1 -tags=integration -timeout=10m ./...
+	@echo "Merging coverage reports..."
+	@./scripts/merge-coverage.sh coverage_unit.out coverage_integration.out > coverage.out
 	$(call filter_coverage)
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 	@go tool cover -func=coverage.out | grep total
+	@rm -f coverage_unit.out coverage_integration.out
+
+# Install gocovmerge if not present
+.ensure-gocovmerge:
+	@which gocovmerge > /dev/null 2>&1 || (echo "Installing gocovmerge..." && go install github.com/wadey/gocovmerge@latest)
+
+# Local coverage with merged unit + integration (for development)
+test-coverage-full: check-infra .ensure-gocovmerge
+	@echo "Running unit tests..."
+	go test -short -coverprofile=coverage_unit.out -coverpkg=./... ./...
+	@echo "Running integration tests..."
+	go test -coverprofile=coverage_integration.out -coverpkg=./... -tags=integration ./...
+	@echo "Merging coverage reports..."
+	@./scripts/merge-coverage.sh coverage_unit.out coverage_integration.out > coverage.out
+	$(call filter_coverage)
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Full coverage report (unit + integration): coverage.html"
+	@go tool cover -func=coverage.out | grep total
+	@rm -f coverage_unit.out coverage_integration.out
 
 # Dependencies
 deps:
@@ -145,4 +171,4 @@ test-stats:
 # Clean up
 clean:
 	rm -rf bin/
-	rm -f coverage.out coverage.html
+	rm -f coverage.out coverage.html coverage_unit.out coverage_integration.out coverage.filtered.out
