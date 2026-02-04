@@ -2,6 +2,7 @@ package retry_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -132,4 +133,188 @@ func TestRetrySchedule(t *testing.T) {
 		}
 		previousDelay = delay
 	}
+}
+
+func TestNextRetryAt(t *testing.T) {
+	retryConfig := config.DefaultConfig().Retry
+	retryConfig.Jitter = 0 // No jitter for predictable results
+	strategy := retry.NewStrategy(retryConfig)
+
+	now := time.Now()
+	attempt := 2
+	circuitState := domain.CircuitClosed
+
+	retryAt := strategy.NextRetryAt(attempt, circuitState)
+
+	// Should be in the future
+	assert.True(t, retryAt.After(now), "NextRetryAt should return a future time")
+
+	// Should be approximately baseDelay * 2^attempt from now (with no jitter)
+	expectedDelay := strategy.NextDelay(attempt, circuitState)
+	expectedTime := now.Add(expectedDelay)
+	diff := retryAt.Sub(expectedTime)
+	if diff < 0 {
+		diff = -diff
+	}
+	assert.Less(t, diff, 100*time.Millisecond, "NextRetryAt should be consistent with NextDelay")
+}
+
+func TestNextRetryAt_DifferentCircuitStates(t *testing.T) {
+	retryConfig := config.DefaultConfig().Retry
+	retryConfig.Jitter = 0 // No jitter for predictable results
+	strategy := retry.NewStrategy(retryConfig)
+
+	now := time.Now()
+
+	tests := []struct {
+		name         string
+		circuitState domain.CircuitState
+		minDuration  time.Duration
+		maxDuration  time.Duration
+	}{
+		{
+			name:         "CircuitClosed",
+			circuitState: domain.CircuitClosed,
+			minDuration:  retryConfig.BaseDelay,
+			maxDuration:  retryConfig.BaseDelay * 2, // 1s with no jitter
+		},
+		{
+			name:         "CircuitOpen",
+			circuitState: domain.CircuitOpen,
+			minDuration:  5 * time.Minute,
+			maxDuration:  5*time.Minute + 10*time.Millisecond, // Allow some tolerance for time.Now() overhead
+		},
+		{
+			name:         "CircuitHalfOpen",
+			circuitState: domain.CircuitHalfOpen,
+			minDuration:  30 * time.Second,
+			maxDuration:  30*time.Second + 10*time.Millisecond, // Allow some tolerance
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retryAt := strategy.NextRetryAt(0, tt.circuitState)
+			duration := retryAt.Sub(now)
+			assert.GreaterOrEqual(t, duration, tt.minDuration)
+			assert.LessOrEqual(t, duration, tt.maxDuration)
+		})
+	}
+}
+
+func TestMaxAttempts(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxAttempts int
+	}{
+		{"Default", 3},
+		{"High", 10},
+		{"Low", 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retryConfig := config.DefaultConfig().Retry
+			retryConfig.MaxAttempts = tt.maxAttempts
+			strategy := retry.NewStrategy(retryConfig)
+
+			assert.Equal(t, tt.maxAttempts, strategy.MaxAttempts())
+		})
+	}
+}
+
+func TestShouldRetry_MaxAttemptsBoundary(t *testing.T) {
+	retryConfig := config.DefaultConfig().Retry
+	retryConfig.MaxAttempts = 3 // Set a fixed value
+	strategy := retry.NewStrategy(retryConfig)
+
+	tests := []struct {
+		name     string
+		attempt  int
+		expected bool
+	}{
+		{"At limit", 3, false},  // Attempt >= MaxAttempts
+		{"One below limit", 2, true},
+		{"One above limit", 4, false},
+		{"Zero attempts", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wh := testutil.NewTestWebhook("http://example.com")
+			wh.Attempt = tt.attempt
+			wh.MaxAttempts = 3 // Match the strategy config
+			result := strategy.ShouldRetry(wh, 500, nil)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsExhausted_Boundary(t *testing.T) {
+	retryConfig := config.DefaultConfig().Retry
+	retryConfig.MaxAttempts = 3
+	strategy := retry.NewStrategy(retryConfig)
+
+	tests := []struct {
+		name     string
+		attempt  int
+		expected bool
+	}{
+		{"At max", 3, true},  // attempt >= maxAttempts
+		{"Below max", 2, false},
+		{"Zero", 0, false},
+		{"Negative", -1, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := strategy.IsExhausted(tt.attempt)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestNextDelay_ExponentialBackoff(t *testing.T) {
+	retryConfig := config.RetryConfig{
+		BaseDelay:   1 * time.Second,
+		MaxDelay:    1 * time.Hour,
+		MaxAttempts: 10,
+		Jitter:      0, // No jitter for predictable results
+	}
+	strategy := retry.NewStrategy(retryConfig)
+
+	tests := []struct {
+		attempt      int
+		expectedBase time.Duration
+	}{
+		{0, 1 * time.Second},       // 2^0 = 1
+		{1, 2 * time.Second},       // 2^1 = 2
+		{2, 4 * time.Second},       // 2^2 = 4
+		{3, 8 * time.Second},       // 2^3 = 8
+		{4, 16 * time.Second},      // 2^4 = 16
+		{5, 32 * time.Second},      // 2^5 = 32
+		{10, 1024 * time.Second},   // 2^10 = 1024 (capped at 10)
+		{15, 1024 * time.Second},   // Still capped at 10
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("Attempt%d", tt.attempt), func(t *testing.T) {
+			delay := strategy.NextDelay(tt.attempt, domain.CircuitClosed)
+			assert.Equal(t, tt.expectedBase, delay)
+		})
+	}
+}
+
+func TestAddJitter_ZeroJitter(t *testing.T) {
+	retryConfig := config.RetryConfig{
+		BaseDelay:   10 * time.Second,
+		MaxDelay:    1 * time.Hour,
+		MaxAttempts: 5,
+		Jitter:      0, // No jitter
+	}
+	strategy := retry.NewStrategy(retryConfig)
+
+	// Without jitter, delay should be exact
+	delay := strategy.NextDelay(0, domain.CircuitClosed)
+	assert.Equal(t, retryConfig.BaseDelay, delay)
 }
