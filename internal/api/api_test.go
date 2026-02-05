@@ -103,6 +103,8 @@ func TestEnqueueWebhook_PublishError(t *testing.T) {
 
 	mockPub.On("PublishWebhook", mock.Anything, mock.Anything).Return(errors.New("kafka error"))
 	mockHS.On("GetScript", mock.Anything, domain.ConfigID("test-config")).Return("", errors.New("not found"))
+	mockHS.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	reqBody := `{"endpoint":"https://example.com/webhook","payload":{"test":"data"}}`
 	w := httptest.NewRecorder()
@@ -150,6 +152,7 @@ func TestEnqueueWebhookBatch_Success(t *testing.T) {
 	mockPub.On("PublishWebhook", mock.Anything, mock.Anything).Return(nil).Times(2)
 	mockHS.On("SetStatus", mock.Anything, mock.Anything).Return(nil).Times(2)
 	mockHS.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHS.On("GetScript", mock.Anything, domain.ConfigID("test-config")).Return("", errors.New("not found")).Times(2)
 
 	reqBody := `{
@@ -186,6 +189,7 @@ func TestEnqueueWebhookBatch_PartialFailure(t *testing.T) {
 	mockPub.On("PublishWebhook", mock.Anything, mock.Anything).Return(errors.New("kafka error")).Once()
 	mockHS.On("SetStatus", mock.Anything, mock.Anything).Return(nil).Once()
 	mockHS.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHS.On("GetScript", mock.Anything, domain.ConfigID("test-config")).Return("", errors.New("not found")).Times(2)
 
 	reqBody := `{

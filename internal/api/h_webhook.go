@@ -18,32 +18,7 @@ func (s *Server) enqueueWebhook(c *gin.Context) {
 		return
 	}
 
-	webhook := s.buildWebhook(domain.ConfigID(configID), &req)
-
-	// Publish to Kafka
-	if err := s.publisher.PublishWebhook(c.Request.Context(), webhook); err != nil {
-		log.Error().Err(err).Str("webhook_id", string(webhook.ID)).Msg("Failed to enqueue webhook")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue"})
-		return
-	}
-
-	// Set initial status
-	status := &domain.WebhookStatus{
-		WebhookID: webhook.ID,
-		State:     domain.StatePending,
-		Attempts:  0,
-	}
-	s.hotstate.SetStatus(c.Request.Context(), status)
-
-	// Record stats
-	bucket := time.Now().Format("2006010215")
-	s.hotstate.IncrStats(c.Request.Context(), bucket, map[string]int64{"enqueued": 1})
-	s.hotstate.AddToHLL(c.Request.Context(), "endpoints:"+bucket, string(webhook.EndpointHash))
-
-	c.JSON(http.StatusAccepted, EnqueueResponse{
-		WebhookID: string(webhook.ID),
-		Status:    "pending",
-	})
+	s.processEnqueue(c, configID, []EnqueueRequest{req})
 }
 
 func (s *Server) enqueueWebhookBatch(c *gin.Context) {
@@ -55,15 +30,33 @@ func (s *Server) enqueueWebhookBatch(c *gin.Context) {
 		return
 	}
 
-	responses := make([]EnqueueResponse, 0, len(req.Webhooks))
+	s.processEnqueue(c, configID, req.Webhooks)
+}
+
+// processEnqueue is the unified helper for enqueueing webhooks.
+// It handles both single and batch enqueue operations.
+func (s *Server) processEnqueue(c *gin.Context, configID string, reqs []EnqueueRequest) {
+	ctx := c.Request.Context()
+	responses := make([]EnqueueResponse, 0, len(reqs))
 	var accepted, failed int
+	var firstPublishError error
+	var firstEndpointHash string
 
-	for _, webhookReq := range req.Webhooks {
-		webhook := s.buildWebhook(domain.ConfigID(configID), &webhookReq)
+	for i, req := range reqs {
+		webhook := s.buildWebhook(domain.ConfigID(configID), &req)
 
-		if err := s.publisher.PublishWebhook(c.Request.Context(), webhook); err != nil {
+		// Capture the first endpoint hash for stats
+		if i == 0 {
+			firstEndpointHash = string(webhook.EndpointHash)
+		}
+
+		// Publish to Kafka
+		if err := s.publisher.PublishWebhook(ctx, webhook); err != nil {
 			log.Error().Err(err).Str("webhook_id", string(webhook.ID)).Msg("Failed to enqueue webhook")
 			failed++
+			if firstPublishError == nil {
+				firstPublishError = err
+			}
 			continue
 		}
 
@@ -73,7 +66,7 @@ func (s *Server) enqueueWebhookBatch(c *gin.Context) {
 			State:     domain.StatePending,
 			Attempts:  0,
 		}
-		s.hotstate.SetStatus(c.Request.Context(), status)
+		s.hotstate.SetStatus(ctx, status)
 
 		responses = append(responses, EnqueueResponse{
 			WebhookID: string(webhook.ID),
@@ -84,13 +77,27 @@ func (s *Server) enqueueWebhookBatch(c *gin.Context) {
 
 	// Record stats
 	bucket := time.Now().Format("2006010215")
-	s.hotstate.IncrStats(c.Request.Context(), bucket, map[string]int64{"enqueued": int64(accepted)})
+	s.hotstate.IncrStats(ctx, bucket, map[string]int64{"enqueued": int64(accepted)})
+	if firstEndpointHash != "" {
+		s.hotstate.AddToHLL(ctx, "endpoints:"+bucket, firstEndpointHash)
+	}
 
-	c.JSON(http.StatusAccepted, BatchEnqueueResponse{
-		Webhooks: responses,
-		Accepted: accepted,
-		Failed:   failed,
-	})
+	// Return appropriate response based on request type
+	if len(reqs) == 1 {
+		// For single webhook: maintain backward compatibility
+		// If the only webhook failed, return 500
+		if len(responses) == 0 && firstPublishError != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue"})
+			return
+		}
+		c.JSON(http.StatusAccepted, responses[0])
+	} else {
+		c.JSON(http.StatusAccepted, BatchEnqueueResponse{
+			Webhooks: responses,
+			Accepted: accepted,
+			Failed:   failed,
+		})
+	}
 }
 
 func (s *Server) getStatus(c *gin.Context) {

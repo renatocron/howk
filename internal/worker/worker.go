@@ -76,11 +76,11 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 
 	return w.broker.Subscribe(ctx, w.config.Kafka.Topics.Pending, w.config.Kafka.ConsumerGroup, func(ctx context.Context, msg *broker.Message) error {
-		return w.processMessage(ctx, msg)
+		return w.processMessage(ctx, msg, false)
 	})
 }
 
-func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error {
+func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlowLane bool) error {
 	// Parse webhook
 	var webhook domain.Webhook
 	if err := json.Unmarshal(msg.Value, &webhook); err != nil {
@@ -127,8 +127,20 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message) error 
 		logger.Warn().Err(err).Msg("Concurrency check failed, proceeding with delivery")
 		// On Redis failure, proceed normally (fail-open)
 	} else if inflightCount > int64(w.config.Concurrency.MaxInflightPerEndpoint) {
-		// Over threshold: decrement (we just incremented) and divert
+		// Over threshold: decrement (we just incremented) and handle based on lane
 		w.hotstate.DecrInflight(ctx, webhook.EndpointHash)
+
+		if isSlowLane {
+			// We're already in the slow lane and still over threshold.
+			// Return error to NACK the message and let Kafka's consumer backoff handle the wait.
+			// This prevents an infinite loop of read->divert->read.
+			logger.Info().
+				Int64("inflight", inflightCount).
+				Int("threshold", w.config.Concurrency.MaxInflightPerEndpoint).
+				Msg("Endpoint saturated even in slow lane, NACKing for retry")
+			return fmt.Errorf("endpoint saturated in slow lane: inflight=%d, threshold=%d", inflightCount, w.config.Concurrency.MaxInflightPerEndpoint)
+		}
+
 		logger.Info().
 			Int64("inflight", inflightCount).
 			Int("threshold", w.config.Concurrency.MaxInflightPerEndpoint).

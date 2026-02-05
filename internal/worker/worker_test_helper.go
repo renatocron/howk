@@ -10,6 +10,7 @@ import (
 
 // ProcessMessage exports the internal processMessage for testing
 // This is only available in test builds (when integration tag is not set)
+// Defaults to fast lane (isSlowLane=false).
 func (w *Worker) ProcessMessage(ctx context.Context, msg *broker.Message) error {
-	return w.processMessage(ctx, msg)
+	return w.processMessage(ctx, msg, false)
 }

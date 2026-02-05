@@ -220,61 +220,49 @@ func NewKafkaWebhookPublisher(broker *KafkaBroker, topics config.TopicsConfig) *
 	}
 }
 
-func (p *KafkaWebhookPublisher) PublishWebhook(ctx context.Context, webhook *domain.Webhook) error {
-	data, err := json.Marshal(webhook)
-	if err != nil {
-		return fmt.Errorf("marshal webhook: %w", err)
+// publishGeneric is a helper for publishing messages with common logic.
+func (p *KafkaWebhookPublisher) publishGeneric(ctx context.Context, topic string, key string, payload interface{}, headers map[string]string) error {
+	var value []byte
+	var err error
+
+	if payload != nil {
+		value, err = json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal payload: %w", err)
+		}
 	}
 
 	msg := Message{
-		Key:   []byte(webhook.ConfigID),
-		Value: data,
-		Headers: map[string]string{
-			"config_id":     string(webhook.ConfigID),
-			"endpoint_hash": string(webhook.EndpointHash),
-			"attempt":       fmt.Sprintf("%d", webhook.Attempt),
-		},
+		Key:     []byte(key),
+		Value:   value,
+		Headers: headers,
 	}
 
-	return p.broker.Publish(ctx, p.topics.Pending, msg)
+	return p.broker.Publish(ctx, topic, msg)
+}
+
+func (p *KafkaWebhookPublisher) PublishWebhook(ctx context.Context, webhook *domain.Webhook) error {
+	return p.publishGeneric(ctx, p.topics.Pending, string(webhook.ConfigID), webhook, map[string]string{
+		"config_id":     string(webhook.ConfigID),
+		"endpoint_hash": string(webhook.EndpointHash),
+		"attempt":       fmt.Sprintf("%d", webhook.Attempt),
+	})
 }
 
 func (p *KafkaWebhookPublisher) PublishResult(ctx context.Context, result *domain.DeliveryResult) error {
-	data, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Errorf("marshal result: %w", err)
-	}
-
-	msg := Message{
-		Key:   []byte(result.WebhookID),
-		Value: data,
-		Headers: map[string]string{
-			"config_id":     string(result.ConfigID),
-			"endpoint_hash": string(result.EndpointHash),
-			"success":       fmt.Sprintf("%t", result.Success),
-		},
-	}
-
-	return p.broker.Publish(ctx, p.topics.Results, msg)
+	return p.publishGeneric(ctx, p.topics.Results, string(result.WebhookID), result, map[string]string{
+		"config_id":     string(result.ConfigID),
+		"endpoint_hash": string(result.EndpointHash),
+		"success":       fmt.Sprintf("%t", result.Success),
+	})
 }
 
 func (p *KafkaWebhookPublisher) PublishDeadLetter(ctx context.Context, dl *domain.DeadLetter) error {
-	data, err := json.Marshal(dl)
-	if err != nil {
-		return fmt.Errorf("marshal dead letter: %w", err)
-	}
-
-	msg := Message{
-		Key:   []byte(dl.Webhook.ID),
-		Value: data,
-		Headers: map[string]string{
-			"config_id":   string(dl.Webhook.ConfigID),
-			"reason":      dl.Reason,
-			"reason_type": string(dl.ReasonType),
-		},
-	}
-
-	return p.broker.Publish(ctx, p.topics.DeadLetter, msg)
+	return p.publishGeneric(ctx, p.topics.DeadLetter, string(dl.Webhook.ID), dl, map[string]string{
+		"config_id":   string(dl.Webhook.ConfigID),
+		"reason":      dl.Reason,
+		"reason_type": string(dl.ReasonType),
+	})
 }
 
 func (p *KafkaWebhookPublisher) Close() error {
@@ -282,23 +270,12 @@ func (p *KafkaWebhookPublisher) Close() error {
 }
 
 func (p *KafkaWebhookPublisher) PublishToSlow(ctx context.Context, webhook *domain.Webhook) error {
-	data, err := json.Marshal(webhook)
-	if err != nil {
-		return fmt.Errorf("marshal webhook for slow: %w", err)
-	}
-
-	msg := Message{
-		Key:   []byte(webhook.ConfigID),
-		Value: data,
-		Headers: map[string]string{
-			"config_id":     string(webhook.ConfigID),
-			"endpoint_hash": string(webhook.EndpointHash),
-			"attempt":       fmt.Sprintf("%d", webhook.Attempt),
-			"source":        "penalty_box",
-		},
-	}
-
-	return p.broker.Publish(ctx, p.topics.Slow, msg)
+	return p.publishGeneric(ctx, p.topics.Slow, string(webhook.ConfigID), webhook, map[string]string{
+		"config_id":     string(webhook.ConfigID),
+		"endpoint_hash": string(webhook.EndpointHash),
+		"attempt":       fmt.Sprintf("%d", webhook.Attempt),
+		"source":        "penalty_box",
+	})
 }
 
 // PublishState publishes a webhook state snapshot to the compacted state topic.
@@ -306,24 +283,7 @@ func (p *KafkaWebhookPublisher) PublishToSlow(ctx context.Context, webhook *doma
 // This enables zero-maintenance reconciliation by storing the active state of
 // webhooks that are pending retries in a compacted Kafka topic.
 func (p *KafkaWebhookPublisher) PublishState(ctx context.Context, snapshot *domain.WebhookStateSnapshot) error {
-	var value []byte
-	var key []byte
-	var headers map[string]string
-
-	if snapshot != nil {
-		// Publish active state snapshot
-		data, err := json.Marshal(snapshot)
-		if err != nil {
-			return fmt.Errorf("marshal state snapshot: %w", err)
-		}
-		value = data
-		key = []byte(snapshot.WebhookID)
-		headers = map[string]string{
-			"config_id": string(snapshot.ConfigID),
-			"state":     snapshot.State,
-			"type":      "state",
-		}
-	} else {
+	if snapshot == nil {
 		// Tombstone case - value is nil, key must be provided by caller
 		// This is handled by the worker passing a snapshot with only WebhookID set
 		// or by using a separate method. For now, we handle nil as tombstone
@@ -332,28 +292,20 @@ func (p *KafkaWebhookPublisher) PublishState(ctx context.Context, snapshot *doma
 		return fmt.Errorf("snapshot cannot be nil, use snapshot with WebhookID only for tombstone")
 	}
 
-	msg := Message{
-		Key:     key,
-		Value:   value,
-		Headers: headers,
-	}
-
-	return p.broker.Publish(ctx, p.topics.State, msg)
+	return p.publishGeneric(ctx, p.topics.State, string(snapshot.WebhookID), snapshot, map[string]string{
+		"config_id": string(snapshot.ConfigID),
+		"state":     snapshot.State,
+		"type":      "state",
+	})
 }
 
 // PublishStateTombstone publishes a tombstone (nil value) to the state topic
 // to indicate that a webhook has reached a terminal state and should be removed
 // from the compacted topic during log compaction.
 func (p *KafkaWebhookPublisher) PublishStateTombstone(ctx context.Context, webhookID domain.WebhookID) error {
-	msg := Message{
-		Key:   []byte(webhookID),
-		Value: nil, // Tombstone - nil value signals deletion in compacted topic
-		Headers: map[string]string{
-			"type": "tombstone",
-		},
-	}
-
-	return p.broker.Publish(ctx, p.topics.State, msg)
+	return p.publishGeneric(ctx, p.topics.State, string(webhookID), nil, map[string]string{
+		"type": "tombstone",
+	})
 }
 
 // Ping checks connectivity to the underlying Kafka broker

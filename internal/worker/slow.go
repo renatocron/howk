@@ -77,20 +77,19 @@ func (sw *SlowWorker) processSlowMessage(ctx context.Context, msg *broker.Messag
 		Str("lane", "slow").
 		Logger()
 
-	// Process through the same logic as fast lane
-	// The concurrency check in processMessage will re-check the endpoint.
-	// If the endpoint has recovered (inflight < threshold), the message proceeds normally.
-	// If still over threshold, it will be diverted back to slow topic (backpressure loop).
-	err := sw.worker.processMessage(ctx, msg)
+	// Process through the same logic as fast lane, but pass isSlowLane=true
+	// This prevents infinite loops: if still over threshold in slow lane,
+	// the message will be NACKed and retried via Kafka's consumer backoff.
+	err := sw.worker.processMessage(ctx, msg, true)
 
 	// Record slow_delivered stat on successful processing
 	// Note: processMessage returns nil on success or terminal failure (DLQ)
-	// We only record stats for successful deliveries, not for diverted/re-diverted messages
+	// We only record stats for successful deliveries, not for NACKed messages
 	if err == nil {
 		sw.worker.recordStats(ctx, "slow_delivered", &webhook)
 		logger.Debug().Msg("Slow lane delivery completed")
 	} else {
-		logger.Warn().Err(err).Msg("Slow lane delivery error")
+		logger.Warn().Err(err).Msg("Slow lane delivery error (will retry via Kafka)")
 	}
 
 	return err
