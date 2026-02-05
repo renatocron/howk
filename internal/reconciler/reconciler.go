@@ -34,9 +34,22 @@ func NewReconciler(cfg config.KafkaConfig, hs hotstate.HotState, ttlCfg config.T
 }
 
 // Run rebuilds Redis state from the compacted state topic.
+//
+// DESIGN NOTE: This is a "stop-the-world" startup/recovery operation. It assumes:
+// 1. Workers are stopped or Redis is in an inconsistent state
+// 2. The reconciler is the only writer to Redis during this phase
+// 3. Once complete, workers can resume and will naturally correct any minor drift
+//
 // The fromBeginning parameter is kept for API compatibility but is ignored
 // because for a compacted topic, we ALWAYS read from the beginning to build
 // the full state table.
+//
+// Race Condition Note: If workers are running during reconciliation, they may
+// publish state updates to both Redis and Kafka after we've passed the HWM.
+// This is acceptable because:
+// 1. The reconciler is meant for disaster recovery (Redis completely lost)
+// 2. Workers will naturally overwrite Redis state after reconciliation completes
+// 3. The compacted topic always has the authoritative state
 func (r *Reconciler) Run(ctx context.Context, fromBeginning bool) error {
 	// Ignore fromBeginning - we always read from beginning for compacted topics
 	_ = fromBeginning

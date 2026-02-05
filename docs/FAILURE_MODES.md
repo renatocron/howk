@@ -67,17 +67,25 @@
 - Protects both HOWK and the recipient
 - Circuit will reopen when Redis recovers
 
-**Recovery (Zero Maintenance):**
-1. Bring Redis back online (empty or from backup)
-2. Run reconciler to restore state:
+**Recovery (Zero Maintenance - Stop-the-World):**
+1. **Stop workers** (or ensure minimal activity)
+2. Bring Redis back online (empty or from backup)
+3. Run reconciler to restore state:
 ```bash
    ./bin/howk-reconciler
 ```
-3. Reconciler consumes `howk.state` compacted topic:
+4. Reconciler consumes `howk.state` compacted topic:
    - Always reads from beginning (compacted topic semantics)
    - Restores status for webhooks pending retry
    - Rebuilds retry queue from active snapshots
    - Skips tombstones (terminal states already removed)
+5. **Resume workers**
+
+**Design Assumptions:**
+- The reconciler is a **startup/disaster recovery** tool, not continuous healing
+- It assumes exclusive write access to Redis during execution
+- Workers running during reconciliation may cause temporary drift (acceptable)
+- Workers will naturally correct Redis state after reconciliation completes
 
 **How it works:**
 - Workers publish state snapshots to `howk.state` on each state change

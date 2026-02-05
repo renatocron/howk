@@ -695,13 +695,15 @@ Response:
 
 ### Redis Dies (Zero Maintenance Recovery)
 
-1. Redis comes back (empty or stale)
-2. Run reconciler: `howk-reconciler`
-3. Reconciler consumes `howk.state` compacted topic:
+**Stop-the-World Procedure:**
+1. Stop workers (or ensure minimal activity)
+2. Redis comes back (empty or stale)
+3. Run reconciler: `howk-reconciler`
+4. Reconciler consumes `howk.state` compacted topic:
    - Always reads from beginning (compacted topic semantics)
    - Skips tombstones (terminal states)
    - Restores status and retry schedules from active snapshots
-4. Normal operation resumes
+5. Resume workers - normal operation resumes
 
 **Why this works:**
 - Workers continuously publish state snapshots to `howk.state` topic
@@ -709,7 +711,7 @@ Response:
 - Terminal webhooks (delivered/exhausted) → tombstone published
 - Kafka compaction retains only the latest state per webhook
 
-**During rebuild:** Workers keep delivering (Kafka is the queue). Status queries return "rebuilding".
+**Design Note:** The reconciler is a disaster recovery tool, not continuous healing. It assumes exclusive Redis access during execution. Workers running during reconciliation may cause temporary drift, which they'll correct naturally after resuming.
 
 **No data loss:** Redis state is fully reconstructible from Kafka's compacted topic.
 
