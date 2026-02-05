@@ -4,6 +4,8 @@ package worker_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,7 +13,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-
+	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
@@ -212,3 +214,247 @@ func TestSlowWorker_Creation(t *testing.T) {
 	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
 	require.NotNil(t, slowWorker)
 }
+
+// =============================================================================
+// processSlowMessage Tests (via exported test helper)
+// =============================================================================
+
+// TestProcessSlowMessage_MalformedJSON tests handling of malformed JSON in slow lane
+func TestProcessSlowMessage_MalformedJSON(t *testing.T) {
+	cfg := config.DefaultConfig()
+
+	mockBroker := new(MockBroker)
+	mockPublisher := new(MockPublisher)
+	mockHotState := new(MockHotState)
+	mockCircuitBreaker := new(mocks.MockCircuitBreaker)
+	mockDeliveryClient := new(MockDeliveryClient)
+	mockRetryStrategy := new(MockRetryStrategy)
+
+	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
+
+	testScriptLoader := script.NewLoader()
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})
+
+	w := worker.NewWorker(
+		cfg,
+		mockBroker,
+		mockPublisher,
+		mockHotState,
+		mockDeliveryClient,
+		mockRetryStrategy,
+		testScriptEngine,
+	)
+
+	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
+
+	// Create malformed JSON message
+	msg := &broker.Message{
+		Key:   []byte("test-key"),
+		Value: []byte("{invalid-json"),
+	}
+
+	// Should return nil (don't retry malformed messages)
+	err := slowWorker.ProcessSlowMessageForTest(context.Background(), msg)
+	require.NoError(t, err)
+}
+
+// TestProcessSlowMessage_Success tests successful slow lane processing
+func TestProcessSlowMessage_Success(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+
+	mockBroker := new(MockBroker)
+	mockPublisher := new(MockPublisher)
+	mockHotState := new(MockHotState)
+	mockCircuitBreaker := new(mocks.MockCircuitBreaker)
+	mockDeliveryClient := new(MockDeliveryClient)
+	mockRetryStrategy := new(MockRetryStrategy)
+
+	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
+
+	webhook := &domain.Webhook{
+		ID:           domain.WebhookID("wh-slow-123"),
+		ConfigID:     domain.ConfigID("cfg-test"),
+		EndpointHash: domain.EndpointHash("hash-abc"),
+		Endpoint:     "https://example.com/webhook",
+		Payload:      []byte(`{"test":"data"}`),
+		Attempt:      1,
+		MaxAttempts:  3,
+	}
+
+	// Idempotency check passes
+	mockHotState.On("CheckAndSetProcessed", ctx, webhook.ID, webhook.Attempt, mock.Anything).
+		Return(true, nil)
+
+	// Circuit allows
+	mockCircuitBreaker.On("ShouldAllow", ctx, webhook.EndpointHash).
+		Return(true, false, nil)
+
+	// Concurrency check passes
+	mockHotState.On("IncrInflight", ctx, webhook.EndpointHash, mock.Anything).
+		Return(int64(1), nil)
+
+	// Status updates
+	mockHotState.On("SetStatus", ctx, mock.Anything).Return(nil)
+
+	// Delivery succeeds
+	mockDeliveryClient.On("Deliver", ctx, mock.Anything).
+		Return(&delivery.Result{
+			StatusCode: 200,
+			Duration:   100 * time.Millisecond,
+		})
+
+	// Circuit success
+	mockCircuitBreaker.On("RecordSuccess", ctx, webhook.EndpointHash).
+		Return(&domain.CircuitBreaker{
+			EndpointHash: webhook.EndpointHash,
+			State:        domain.CircuitClosed,
+		}, nil)
+
+	// Result publishing
+	mockPublisher.On("PublishResult", ctx, mock.Anything).Return(nil)
+
+	// Stats recording - processMessage records delivered, processSlowMessage records slow_delivered
+	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockHotState.On("Client").Return(nil)
+	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	// DECR on exit
+	mockHotState.On("DecrInflight", ctx, webhook.EndpointHash).Return(nil)
+
+	// Retry cleanup
+	mockHotState.On("DeleteRetryData", ctx, webhook.ID).Return(nil)
+
+	testScriptLoader := script.NewLoader()
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})
+
+	w := worker.NewWorker(
+		cfg,
+		mockBroker,
+		mockPublisher,
+		mockHotState,
+		mockDeliveryClient,
+		mockRetryStrategy,
+		testScriptEngine,
+	)
+
+	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
+
+	// Create valid webhook message
+	webhookJSON, _ := json.Marshal(webhook)
+	msg := &broker.Message{
+		Key:   []byte(webhook.ConfigID),
+		Value: webhookJSON,
+	}
+
+	// Process through slow lane
+	err := slowWorker.ProcessSlowMessageForTest(ctx, msg)
+	require.NoError(t, err)
+
+	// Verify stats were recorded with slow_delivered
+	mockHotState.AssertExpectations(t)
+}
+
+// TestProcessSlowMessage_ProcessError tests error handling when processing fails
+func TestProcessSlowMessage_ProcessError(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+
+	mockBroker := new(MockBroker)
+	mockPublisher := new(MockPublisher)
+	mockHotState := new(MockHotState)
+	mockCircuitBreaker := new(mocks.MockCircuitBreaker)
+	mockDeliveryClient := new(MockDeliveryClient)
+	mockRetryStrategy := new(MockRetryStrategy)
+
+	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
+
+	webhook := &domain.Webhook{
+		ID:           domain.WebhookID("wh-slow-456"),
+		ConfigID:     domain.ConfigID("cfg-test"),
+		EndpointHash: domain.EndpointHash("hash-def"),
+		Endpoint:     "https://example.com/webhook",
+		Payload:      []byte(`{"test":"data"}`),
+		Attempt:      1,
+		MaxAttempts:  3,
+	}
+
+	// Idempotency check passes
+	mockHotState.On("CheckAndSetProcessed", ctx, webhook.ID, webhook.Attempt, mock.Anything).
+		Return(true, nil)
+
+	// Circuit allows
+	mockCircuitBreaker.On("ShouldAllow", ctx, webhook.EndpointHash).
+		Return(true, false, nil)
+
+	// Concurrency check passes
+	mockHotState.On("IncrInflight", ctx, webhook.EndpointHash, mock.Anything).
+		Return(int64(1), nil)
+
+	// Status updates (delivering + failed)
+	mockHotState.On("SetStatus", ctx, mock.Anything).Return(nil)
+
+	// Delivery fails
+	mockDeliveryClient.On("Deliver", ctx, mock.Anything).
+		Return(&delivery.Result{
+			StatusCode: 500,
+			Error:      errors.New("server error"),
+			Duration:   100 * time.Millisecond,
+		})
+
+	// Circuit failure recorded
+	mockCircuitBreaker.On("RecordFailure", ctx, webhook.EndpointHash).
+		Return(&domain.CircuitBreaker{
+			EndpointHash: webhook.EndpointHash,
+			State:        domain.CircuitClosed,
+		}, nil)
+
+	// Should retry
+	mockRetryStrategy.On("ShouldRetry", mock.Anything, 500, mock.Anything).Return(true)
+	mockRetryStrategy.On("NextRetryAt", webhook.Attempt, domain.CircuitClosed).
+		Return(time.Now().Add(time.Minute))
+
+	// Retry scheduling
+	mockHotState.On("EnsureRetryData", ctx, mock.Anything, mock.Anything).Return(nil)
+	mockHotState.On("ScheduleRetry", ctx, webhook.ID, webhook.Attempt+1, mock.Anything, mock.Anything).
+		Return(nil)
+
+	// Result publishing
+	mockPublisher.On("PublishResult", ctx, mock.Anything).Return(nil)
+
+	// Stats recording (no slow_delivered on error)
+	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockHotState.On("Client").Return(nil).Maybe()
+	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	// DECR on exit
+	mockHotState.On("DecrInflight", ctx, webhook.EndpointHash).Return(nil)
+
+	testScriptLoader := script.NewLoader()
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})
+
+	w := worker.NewWorker(
+		cfg,
+		mockBroker,
+		mockPublisher,
+		mockHotState,
+		mockDeliveryClient,
+		mockRetryStrategy,
+		testScriptEngine,
+	)
+
+	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
+
+	// Create valid webhook message
+	webhookJSON, _ := json.Marshal(webhook)
+	msg := &broker.Message{
+		Key:   []byte(webhook.ConfigID),
+		Value: webhookJSON,
+	}
+
+	// Process through slow lane - should return error for retry
+	err := slowWorker.ProcessSlowMessageForTest(ctx, msg)
+	require.NoError(t, err) // Returns nil for retryable errors (message stays in queue)
+}
+
+

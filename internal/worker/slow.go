@@ -53,6 +53,12 @@ func (sw *SlowWorker) Run(ctx context.Context) error {
 	})
 }
 
+// ProcessSlowMessageForTest exports processSlowMessage for testing.
+// This is a test helper that should only be used in tests.
+func (sw *SlowWorker) ProcessSlowMessageForTest(ctx context.Context, msg *broker.Message) error {
+	return sw.processSlowMessage(ctx, msg)
+}
+
 // processSlowMessage processes a message from the slow lane.
 // It wraps the standard processMessage but records slow_delivered stat on success.
 func (sw *SlowWorker) processSlowMessage(ctx context.Context, msg *broker.Message) error {
