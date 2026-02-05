@@ -152,6 +152,35 @@ func (m *MockHotState) GetRetryQueueSize(ctx context.Context) (int64, error) {
 	return args.Get(0).(int64), args.Error(1)
 }
 
+// --- Zero Maintenance: Auto-Recovery (Sentinel Pattern) ---
+
+func (m *MockHotState) CheckCanary(ctx context.Context) (bool, error) {
+	args := m.Called(ctx)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockHotState) SetCanary(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
+func (m *MockHotState) WaitForCanary(ctx context.Context, timeout time.Duration) bool {
+	args := m.Called(ctx, timeout)
+	return args.Bool(0)
+}
+
+func (m *MockHotState) AcquireReconcilerLock(ctx context.Context, ttl time.Duration) (bool, func()) {
+	args := m.Called(ctx, ttl)
+	unlockFunc := func() {}
+	if fn, ok := args.Get(1).(func()); ok {
+		unlockFunc = fn
+	}
+	return args.Bool(0), unlockFunc
+}
+
+func (m *MockHotState) DelCanary(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
 // MockCircuitBreakerChecker is a mock implementation of hotstate.CircuitBreakerChecker
 type MockCircuitBreakerChecker struct {
 	mock.Mock

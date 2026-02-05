@@ -25,6 +25,8 @@ const (
 	scriptPrefix       = "script:"
 	concurrencyPrefix  = "concurrency:"
 	systemEpochKey     = "howk:system:epoch"
+	canaryKey          = "howk:system:initialized"
+	reconcilerLockKey  = "howk:reconciler:lock"
 )
 
 // RedisHotState implements HotState using Redis
@@ -448,23 +450,59 @@ func (r *RedisHotState) DeleteRetryData(ctx context.Context, webhookID domain.We
 	return r.rdb.Del(ctx, key).Err()
 }
 
+// setStatusLWW is a Lua script implementing Last-Write-Wins semantics.
+// It only updates if the new timestamp is greater than the existing one.
+// KEYS[1] = status key
+// ARGV[1] = new timestamp (nanoseconds)
+// ARGV[2] = JSON data
+// ARGV[3] = TTL in seconds
+var setStatusLWW = redis.NewScript(`
+	local key = KEYS[1]
+	local new_ts = tonumber(ARGV[1])
+	local data = ARGV[2]
+	local ttl = tonumber(ARGV[3])
+	
+	local old_ts = tonumber(redis.call('HGET', key, 'ts') or '0')
+	if new_ts > old_ts then
+		redis.call('HSET', key, 'data', data, 'ts', new_ts)
+		redis.call('EXPIRE', key, ttl)
+		return 1
+	end
+	return 0
+`)
+
 // --- Status Operations ---
 
 func (r *RedisHotState) SetStatus(ctx context.Context, status *domain.WebhookStatus) error {
 	key := statusPrefix + string(status.WebhookID)
+
+	// Ensure UpdatedAtNs is set (default to now if not provided)
+	if status.UpdatedAtNs == 0 {
+		status.UpdatedAtNs = time.Now().UnixNano()
+	}
 
 	data, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("marshal status: %w", err)
 	}
 
-	return r.rdb.Set(ctx, key, data, r.ttlConfig.StatusTTL).Err()
+	_, err = setStatusLWW.Run(ctx, r.rdb, []string{key},
+		status.UpdatedAtNs,
+		string(data),
+		int64(r.ttlConfig.StatusTTL.Seconds()),
+	).Result()
+	
+	if err != nil {
+		return fmt.Errorf("set status lww: %w", err)
+	}
+	return nil
 }
 
 func (r *RedisHotState) GetStatus(ctx context.Context, webhookID domain.WebhookID) (*domain.WebhookStatus, error) {
 	key := statusPrefix + string(webhookID)
 
-	data, err := r.rdb.Get(ctx, key).Bytes()
+	// Get the data field from hash (LWW storage format)
+	data, err := r.rdb.HGet(ctx, key, "data").Bytes()
 	if err == redis.Nil {
 		return nil, nil
 	}
@@ -623,6 +661,9 @@ func (r *RedisHotState) Ping(ctx context.Context) error {
 }
 
 func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
+	// Remove canary first (signals other instances that rebuild is in progress)
+	r.DelCanary(ctx)
+
 	// Only flush our keys, not the entire database
 	patterns := []string{
 		statusPrefix + "*",
@@ -740,4 +781,103 @@ func (r *RedisHotState) SetEpoch(ctx context.Context, epoch *domain.SystemEpoch)
 // GetRetryQueueSize returns the current size of the retry queue
 func (r *RedisHotState) GetRetryQueueSize(ctx context.Context) (int64, error) {
 	return r.rdb.ZCard(ctx, retryQueue).Result()
+}
+// --- Zero Maintenance: Auto-Recovery (Sentinel Pattern) ---
+
+// CheckCanary checks if the system canary key exists (indicates Redis is initialized)
+func (r *RedisHotState) CheckCanary(ctx context.Context) (bool, error) {
+	exists, err := r.rdb.Exists(ctx, canaryKey).Result()
+	if err != nil {
+		return false, fmt.Errorf("check canary: %w", err)
+	}
+	return exists > 0, nil
+}
+
+// SetCanary sets the system canary key (mark Redis as initialized)
+func (r *RedisHotState) SetCanary(ctx context.Context) error {
+	// Canary never expires - if Redis loses this key, we know we need reconciliation
+	return r.rdb.Set(ctx, canaryKey, "1", 0).Err()
+}
+
+// DelCanary removes the canary key (used during FlushForRebuild)
+func (r *RedisHotState) DelCanary(ctx context.Context) error {
+	return r.rdb.Del(ctx, canaryKey).Err()
+}
+
+// WaitForCanary polls until the canary key appears or timeout
+func (r *RedisHotState) WaitForCanary(ctx context.Context, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		exists, err := r.CheckCanary(ctx)
+		if err == nil && exists {
+			return true
+		}
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			// Continue polling
+		}
+	}
+}
+
+// lockHeartbeat manages lock extension during long-running reconciliation
+func (r *RedisHotState) lockHeartbeat(ctx context.Context, lockValue string, ttl time.Duration, stop chan struct{}) {
+	ticker := time.NewTicker(ttl / 3) // Extend at 1/3 of TTL
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Extend lock TTL (only if we still own it)
+			r.rdb.Eval(ctx, `
+				if redis.call('GET', KEYS[1]) == ARGV[1] then
+					return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+				end
+				return 0
+			`, []string{reconcilerLockKey}, lockValue, int64(ttl.Milliseconds()))
+		}
+	}
+}
+
+// AcquireReconcilerLock attempts to acquire a distributed lock for reconciliation.
+// Returns true if lock acquired, and an unlock function to release it.
+// The lock has a TTL and is automatically extended via heartbeat until unlock.
+func (r *RedisHotState) AcquireReconcilerLock(ctx context.Context, ttl time.Duration) (bool, func()) {
+	// Generate a unique lock value (instance identifier)
+	lockValue := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix())
+
+	// Try to acquire lock with SET NX EX
+	acquired, err := r.rdb.SetNX(ctx, reconcilerLockKey, lockValue, ttl).Result()
+	if err != nil || !acquired {
+		return false, nil
+	}
+
+	// Start heartbeat to extend lock during long reconciliation
+	stopHeartbeat := make(chan struct{})
+	go r.lockHeartbeat(context.Background(), lockValue, ttl, stopHeartbeat)
+
+	// Return unlock function
+	unlock := func() {
+		close(stopHeartbeat)
+		// Only delete if we still own the lock
+		r.rdb.Eval(ctx, `
+			if redis.call('GET', KEYS[1]) == ARGV[1] then
+				return redis.call('DEL', KEYS[1])
+			end
+			return 0
+		`, []string{reconcilerLockKey}, lockValue)
+	}
+
+	return true, unlock
 }

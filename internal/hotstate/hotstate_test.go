@@ -138,19 +138,47 @@ func TestCircuitBreaker_Save_OpenStateTTL(t *testing.T) {
 	require.NoError(t, mockClient.ExpectationsWereMet())
 }
 
+// luaSetStatusLWW is the same script defined in redis.go
+// We redefine it here for test expectations
+var luaSetStatusLWW = `
+	local key = KEYS[1]
+	local new_ts = tonumber(ARGV[1])
+	local data = ARGV[2]
+	local ttl = tonumber(ARGV[3])
+	
+	local old_ts = tonumber(redis.call('HGET', key, 'ts') or '0')
+	if new_ts > old_ts then
+		redis.call('HSET', key, 'data', data, 'ts', new_ts)
+		redis.call('EXPIRE', key, ttl)
+		return 1
+	end
+	return 0
+`
+
+// luaSetStatusLWWHash is the SHA1 hash of the script (cached by go-redis)
+const luaSetStatusLWWHash = "3201f48899258101b2f6a6e034d6652cb6760474"
+
 func TestRedisHotState_SetStatus(t *testing.T) {
 	ctx := context.Background()
 	status := &domain.WebhookStatus{
 		WebhookID: domain.WebhookID("wh-123"),
 		State:     domain.StateDelivered,
 		Attempts:  2,
+		UpdatedAtNs: 1234567890,
 	}
 
 	payload, err := json.Marshal(status)
 	require.NoError(t, err)
 
 	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
-	mockClient.ExpectSet("status:wh-123", payload, 7*24*time.Hour).SetVal("OK")
+	// SetStatus now uses Lua script with LWW semantics
+	mockClient.ExpectEvalSha(
+		luaSetStatusLWWHash,
+		[]string{"status:wh-123"},
+		status.UpdatedAtNs,
+		string(payload),
+		int64(7*24*time.Hour.Seconds()),
+	).SetVal(int64(1))
 
 	setErr := state.SetStatus(ctx, status)
 	require.NoError(t, setErr)
@@ -170,7 +198,8 @@ func TestRedisHotState_GetStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
-	mockClient.ExpectGet("status:wh-123").SetVal(string(payload))
+	// GetStatus now uses HGET to retrieve from hash (LWW storage format)
+	mockClient.ExpectHGet("status:wh-123", "data").SetVal(string(payload))
 
 	fetched, getErr := state.GetStatus(ctx, status.WebhookID)
 	require.NoError(t, getErr)

@@ -373,15 +373,17 @@ func (w *Worker) scheduleRetryForCircuit(ctx context.Context, webhook *domain.We
 }
 
 func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, state string, result *domain.DeliveryResult) {
+	now := time.Now()
 	status := &domain.WebhookStatus{
-		WebhookID: webhook.ID,
-		State:     state,
-		Attempts:  webhook.Attempt + 1,
+		WebhookID:   webhook.ID,
+		State:       state,
+		Attempts:    webhook.Attempt + 1,
+		UpdatedAtNs: now.UnixNano(), // LWW timestamp for conflict resolution
 	}
 
 	if result != nil {
-		now := result.Timestamp
-		status.LastAttemptAt = &now
+		attemptTime := result.Timestamp
+		status.LastAttemptAt = &attemptTime
 		status.LastStatusCode = result.StatusCode
 		status.LastError = result.Error
 
@@ -390,7 +392,7 @@ func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, stat
 		}
 
 		if result.Success {
-			status.DeliveredAt = &now
+			status.DeliveredAt = &attemptTime
 		}
 	}
 
@@ -430,6 +432,7 @@ func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webho
 
 		case domain.StateFailed:
 			// Retryable failure: Snapshot the active state for reconstruction
+			// Use nanosecond timestamp for LWW conflict resolution
 			snapshot := &domain.WebhookStateSnapshot{
 				WebhookID:      webhook.ID,
 				ConfigID:       webhook.ConfigID,
@@ -446,6 +449,7 @@ func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webho
 				CreatedAt:      webhook.CreatedAt,
 				NextRetryAt:    status.NextRetryAt,
 				LastError:      status.LastError,
+				UpdatedAtNs:    time.Now().UnixNano(), // LWW timestamp
 			}
 
 			if err := w.publisher.PublishState(pubCtx, snapshot); err != nil {

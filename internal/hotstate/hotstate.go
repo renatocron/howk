@@ -73,6 +73,25 @@ type HotState interface {
 	SetEpoch(ctx context.Context, epoch *domain.SystemEpoch) error
 	// GetRetryQueueSize returns the current size of the retry queue
 	GetRetryQueueSize(ctx context.Context) (int64, error)
+
+	// --- Zero Maintenance: Auto-Recovery (Sentinel Pattern) ---
+
+	// CheckCanary checks if the system canary key exists (indicates Redis is initialized)
+	CheckCanary(ctx context.Context) (bool, error)
+
+	// SetCanary sets the system canary key (mark Redis as initialized)
+	SetCanary(ctx context.Context) error
+
+	// WaitForCanary polls until the canary key appears or timeout
+	WaitForCanary(ctx context.Context, timeout time.Duration) bool
+
+	// AcquireReconcilerLock attempts to acquire a distributed lock for reconciliation.
+	// Returns true if lock acquired, and an unlock function to release it.
+	// The lock has a TTL and is automatically extended via heartbeat until unlock.
+	AcquireReconcilerLock(ctx context.Context, ttl time.Duration) (bool, func())
+
+	// DelCanary removes the canary key (used during FlushForRebuild)
+	DelCanary(ctx context.Context) error
 }
 
 // CircuitBreakerChecker provides circuit breaker functionality

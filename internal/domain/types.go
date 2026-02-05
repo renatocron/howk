@@ -68,6 +68,7 @@ type WebhookStatus struct {
 	LastError      string     `json:"last_error,omitempty"`
 	NextRetryAt    *time.Time `json:"next_retry_at,omitempty"`
 	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	UpdatedAtNs    int64      `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
 }
 
 // State constants
@@ -198,6 +199,7 @@ type WebhookStateSnapshot struct {
 	Attempt     int       `json:"attempt"`
 	MaxAttempts int       `json:"max_attempts"`
 	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAtNs int64     `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
 
 	// Scheduling
 	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`

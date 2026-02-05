@@ -101,7 +101,14 @@ func (r *Reconciler) Run(ctx context.Context, fromBeginning bool) error {
 		}
 	}
 
-	// 5. Set epoch marker after successful completion
+	// 5. Set canary key to signal Redis is initialized
+	// This allows other workers to know they can start processing
+	if err := r.hotstate.SetCanary(ctx); err != nil {
+		log.Error().Err(err).Msg("Failed to set canary key")
+		// Don't fail reconciliation for this
+	}
+
+	// 6. Set epoch marker after successful completion
 	hostname, _ := os.Hostname()
 	epoch := &domain.SystemEpoch{
 		Epoch:            time.Now().Unix(),
@@ -207,6 +214,13 @@ func (r *Reconciler) consumePartition(
 // restoreState restores Redis state from a snapshot
 func (r *Reconciler) restoreState(ctx context.Context, snap *domain.WebhookStateSnapshot) error {
 	// 1. Restore status object
+	// Use snapshot's UpdatedAtNs for LWW conflict resolution
+	// If not set (legacy snapshot), use current time
+	updatedAtNs := snap.UpdatedAtNs
+	if updatedAtNs == 0 {
+		updatedAtNs = time.Now().UnixNano()
+	}
+
 	status := &domain.WebhookStatus{
 		WebhookID:     snap.WebhookID,
 		State:         snap.State,
@@ -214,6 +228,7 @@ func (r *Reconciler) restoreState(ctx context.Context, snap *domain.WebhookState
 		NextRetryAt:   snap.NextRetryAt,
 		LastError:     snap.LastError,
 		LastAttemptAt: &snap.CreatedAt, // Approximate
+		UpdatedAtNs:   updatedAtNs,     // LWW timestamp from snapshot
 	}
 
 	if err := r.hotstate.SetStatus(ctx, status); err != nil {
