@@ -22,14 +22,15 @@
 - [Circuit Breaker Edge Cases](#circuit-breaker-edge-cases)
   - [12. Circuit Opens During High-Priority Delivery](#12-circuit-opens-during-high-priority-delivery)
   - [13. Flapping Circuit (Open/Close Oscillation)](#13-flapping-circuit-openclose-oscillation)
-- [Reconciler Scenarios](#reconciler-scenarios)
+- [Reconciler Scenarios (Zero Maintenance)](#reconciler-scenarios-zero-maintenance)
   - [14. Reconciler Started While Workers Running](#14-reconciler-started-while-workers-running)
   - [15. Reconciler Fails Mid-Replay](#15-reconciler-fails-mid-replay)
+  - [16. State Topic Compaction Lag](#16-state-topic-compaction-lag)
 - [Partial Redis Failures](#partial-redis-failures)
-  - [16. Redis Latency Spike / Degraded Performance](#16-redis-latency-spike--degraded-performance)
-  - [17. Redis Memory Pressure](#17-redis-memory-pressure)
+  - [17. Redis Latency Spike / Degraded Performance](#17-redis-latency-spike--degraded-performance)
+  - [18. Redis Memory Pressure](#18-redis-memory-pressure)
 - [Dead Letter Queue (DLQ) Classification](#dead-letter-queue-dlq-classification)
-  - [18. Understanding DLQ Reason Types](#18-understanding-dlq-reason-types)
+  - [19. Understanding DLQ Reason Types](#19-understanding-dlq-reason-types)
 - [Monitoring Checklist](#monitoring-checklist)
 
 ## Infrastructure Failures
@@ -66,22 +67,28 @@
 - Protects both HOWK and the recipient
 - Circuit will reopen when Redis recovers
 
-**Recovery:**
+**Recovery (Zero Maintenance):**
 1. Bring Redis back online (empty or from backup)
-2. Run reconciler to rebuild state:
+2. Run reconciler to restore state:
 ```bash
-   ./bin/howk-reconciler --from-beginning
+   ./bin/howk-reconciler
 ```
-3. Reconciler replays `howk.results` topic to rebuild:
-   - Circuit breaker states
-   - Retry queue
-   - Status hashes
-   - Statistics
+3. Reconciler consumes `howk.state` compacted topic:
+   - Always reads from beginning (compacted topic semantics)
+   - Restores status for webhooks pending retry
+   - Rebuilds retry queue from active snapshots
+   - Skips tombstones (terminal states already removed)
+
+**How it works:**
+- Workers publish state snapshots to `howk.state` on each state change
+- Failed webhooks → full snapshot with retry schedule
+- Terminal webhooks → tombstone (removed by compaction)
+- Kafka compaction ensures only latest state per webhook is retained
 
 **Prevention:**
 - Redis Sentinel for HA
 - Redis Cluster for horizontal scaling
-- Regular backups (though state is rebuildable from Kafka)
+- No backups needed (fully rebuildable from Kafka)
 
 </details>
 
@@ -224,7 +231,7 @@
 
 ## Partial Redis Failures
 
-### 16. Redis Latency Spike / Degraded Performance
+### 17. Redis Latency Spike / Degraded Performance
 <details>
 <summary>Details</summary>
 
@@ -257,7 +264,7 @@ redis-cli SLOWLOG GET 10
 
 ---
 
-### 17. Redis Memory Pressure
+### 18. Redis Memory Pressure
 <details>
 <summary>Details</summary>
 
@@ -463,20 +470,21 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 
 ---
 
-## Reconciler Scenarios
+## Reconciler Scenarios (Zero Maintenance)
 
 ### 14. Reconciler Started While Workers Running
 <details>
 <summary>Details</summary>
 
 **Behavior:**
-- Safe: Workers and reconciler both write to Redis
-- Potential race conditions on status updates
-- Last write wins
+- Safe: Workers publish state snapshots to Kafka (not directly conflicting)
+- Reconciler reads from `howk.state` topic, not live Redis
+- Workers may overwrite Redis state after reconciler finishes (normal operation)
 
 **Best Practice:**
-- Stop workers before running reconciler
-- Or accept minor inconsistencies (rebuilding anyway)
+- No need to stop workers during reconciliation
+- Reconciler can run anytime Redis needs rebuilding
+- Workers will naturally correct any stale state
 
 </details>
 
@@ -487,15 +495,38 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 <summary>Details</summary>
 
 **Behavior:**
-- Partial state rebuilt
-- Safe to re-run with `--from-beginning`
-- Idempotent: Rebuilding same state multiple times is safe
+- Partial state restored from compacted topic
+- Safe to re-run (idempotent operation)
+- Each run flushes Redis and rebuilds from scratch
 
 **Recovery:**
 ```bash
-# Just re-run
-./bin/howk-reconciler --from-beginning
+# Just re-run - always reads from beginning for compacted topic
+./bin/howk-reconciler
 ```
+
+**Note:** The `--from-beginning` flag is kept for backward compatibility but is now ignored - compacted topics always read from beginning.
+
+</details>
+
+---
+
+### 16. State Topic Compaction Lag
+<details>
+<summary>Details</summary>
+
+**Behavior:**
+- If `howk.state` topic has compaction lag, some old snapshots may remain
+- Reconciler will see multiple snapshots for same webhook
+- Last snapshot wins (normal behavior)
+
+**Recovery:**
+- No action needed - Kafka will compact eventually
+- Reconciler handles duplicate states correctly
+
+**Monitoring:**
+- Monitor `howk.state` topic size
+- Compaction should keep topic size proportional to active webhooks, not total history
 
 </details>
 
@@ -503,7 +534,7 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 
 ## Dead Letter Queue (DLQ) Classification
 
-### 18. Understanding DLQ Reason Types
+### 19. Understanding DLQ Reason Types
 <details>
 <summary>Details</summary>
 

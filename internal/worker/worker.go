@@ -397,6 +397,63 @@ func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, stat
 	if err := w.hotstate.SetStatus(ctx, status); err != nil {
 		log.Error().Err(err).Str("webhook_id", string(webhook.ID)).Msg("Failed to update status")
 	}
+
+	// Publish state snapshot to compacted topic for zero-maintenance reconciliation
+	// This runs asynchronously to avoid blocking the worker flow
+	w.publishStateSnapshot(ctx, webhook, state, status)
+}
+
+// publishStateSnapshot publishes the webhook state to the compacted Kafka topic.
+// Terminal states (delivered/exhausted) publish tombstones to remove from topic.
+// Failed states publish full snapshots to enable Redis reconstruction on restart.
+func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webhook, state string, status *domain.WebhookStatus) {
+	// Only publish for terminal or retryable-failed states
+	// Skip transient states (delivering, pending) to reduce churn
+	if state != domain.StateDelivered && state != domain.StateExhausted && state != domain.StateFailed {
+		return
+	}
+
+	// Use a goroutine to avoid blocking the main worker flow
+	go func() {
+		// Create a separate context with timeout to ensure publish completes
+		// even if parent context is cancelled
+		pubCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		switch state {
+		case domain.StateDelivered, domain.StateExhausted:
+			// Terminal state: Send tombstone to remove from compacted topic
+			if err := w.publisher.PublishStateTombstone(pubCtx, webhook.ID); err != nil {
+				log.Warn().Err(err).Str("webhook_id", string(webhook.ID)).Str("state", state).
+					Msg("Failed to publish state tombstone")
+			}
+
+		case domain.StateFailed:
+			// Retryable failure: Snapshot the active state for reconstruction
+			snapshot := &domain.WebhookStateSnapshot{
+				WebhookID:      webhook.ID,
+				ConfigID:       webhook.ConfigID,
+				Endpoint:       webhook.Endpoint,
+				EndpointHash:   webhook.EndpointHash,
+				Payload:        webhook.Payload,
+				Headers:        webhook.Headers,
+				IdempotencyKey: webhook.IdempotencyKey,
+				SigningSecret:  webhook.SigningSecret,
+				ScriptHash:     webhook.ScriptHash,
+				State:          state,
+				Attempt:        webhook.Attempt,
+				MaxAttempts:    webhook.MaxAttempts,
+				CreatedAt:      webhook.CreatedAt,
+				NextRetryAt:    status.NextRetryAt,
+				LastError:      status.LastError,
+			}
+
+			if err := w.publisher.PublishState(pubCtx, snapshot); err != nil {
+				log.Warn().Err(err).Str("webhook_id", string(webhook.ID)).
+					Msg("Failed to publish state snapshot")
+			}
+		}
+	}()
 }
 
 func (w *Worker) recordStats(ctx context.Context, stat string, webhook *domain.Webhook) {

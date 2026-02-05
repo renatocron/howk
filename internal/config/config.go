@@ -67,6 +67,7 @@ type TopicsConfig struct {
 	DeadLetter string `mapstructure:"deadletter"`
 	Scripts    string `mapstructure:"scripts"`
 	Slow       string `mapstructure:"slow"`
+	State      string `mapstructure:"state"` // Compacted topic for zero-maintenance reconciliation
 }
 
 type RedisConfig struct {
@@ -160,6 +161,7 @@ func DefaultConfig() *Config {
 				DeadLetter: "howk.deadletter",
 				Scripts:    "howk.scripts",
 				Slow:       "howk.slow",
+				State:      "howk.state",
 			},
 			ConsumerGroup:          "howk-workers",
 			Retention:              7 * 24 * time.Hour, // 7 days
@@ -361,6 +363,7 @@ func bindEnvVariables(v *viper.Viper) error {
 		"lua.http_cache_ttl",
 		// Concurrency / Slow Lane
 		"kafka.topics.slow",
+		"kafka.topics.state",
 		"concurrency.max_inflight_per_endpoint",
 		"concurrency.inflight_ttl",
 		"concurrency.slow_lane_rate",

@@ -38,6 +38,16 @@ func (m *MockWebhookPublisher) PublishToSlow(ctx context.Context, webhook *domai
 	return args.Error(0)
 }
 
+func (m *MockWebhookPublisher) PublishState(ctx context.Context, snapshot *domain.WebhookStateSnapshot) error {
+	args := m.Called(ctx, snapshot)
+	return args.Error(0)
+}
+
+func (m *MockWebhookPublisher) PublishStateTombstone(ctx context.Context, webhookID domain.WebhookID) error {
+	args := m.Called(ctx, webhookID)
+	return args.Error(0)
+}
+
 // MockBroker implements broker.Broker for testing
 type MockBroker struct {
 	mock.Mock

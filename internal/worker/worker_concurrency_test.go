@@ -36,6 +36,10 @@ func setupWorkerWithMocks(t *testing.T) (*worker.Worker, *MockPublisher, *MockHo
 	// Set up the mock to return the circuit breaker
 	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
 
+	// Default: state publishing (async, may not complete before test ends)
+	mockPublisher.On("PublishState", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockPublisher.On("PublishStateTombstone", mock.Anything, mock.Anything).Return(nil).Maybe()
+
 	// Create a test script engine with disabled config
 	testScriptLoader := script.NewLoader()
 	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})

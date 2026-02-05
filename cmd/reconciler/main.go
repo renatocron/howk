@@ -52,7 +52,7 @@ func main() {
 	defer hs.Close()
 
 	// Create and run reconciler
-	rec := reconciler.NewReconciler(cfg.Kafka, hs)
+	rec := reconciler.NewReconciler(cfg.Kafka, hs, cfg.TTL)
 
 	if err := rec.Run(ctx, *fromBeginning); err != nil {
 		if err == context.Canceled {

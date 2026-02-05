@@ -44,6 +44,10 @@ services:
         rpk topic create howk.deadletter --brokers redpanda:9092 -p 3 -r 1 || true
         rpk topic create howk.scripts --brokers redpanda:9092 -p 3 -r 1 -c cleanup.policy=compact -c compression.type=snappy || true
         rpk topic create howk.slow --brokers redpanda:9092 -p 6 -r 1 || true
+        
+        # State topic with compaction - used for zero-maintenance reconciliation
+        rpk topic create howk.state --brokers redpanda:9092 -p 6 -r 1 -c cleanup.policy=compact -c segment.bytes=104857600 -c min.cleanable.dirty.ratio=0.01 || true
+        
         echo "Topics created successfully"
 
   # Redis

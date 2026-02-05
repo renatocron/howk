@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"time"
 
@@ -14,7 +15,9 @@ import (
 	"github.com/howk/howk/internal/hotstate"
 )
 
-// Reconciler rebuilds Redis state from Kafka topics
+// Reconciler rebuilds Redis state from the compacted Kafka state topic.
+// This enables "zero maintenance" operation - Redis can be entirely reconstructed
+// from Kafka on startup, eliminating the need for Redis persistence.
 type Reconciler struct {
 	config    config.KafkaConfig
 	hotstate  hotstate.HotState
@@ -22,135 +25,75 @@ type Reconciler struct {
 }
 
 // NewReconciler creates a new reconciler
-func NewReconciler(cfg config.KafkaConfig, hs hotstate.HotState) *Reconciler {
+func NewReconciler(cfg config.KafkaConfig, hs hotstate.HotState, ttlCfg config.TTLConfig) *Reconciler {
 	return &Reconciler{
-		config:   cfg,
-		hotstate: hs,
+		config:    cfg,
+		hotstate:  hs,
+		ttlConfig: ttlCfg,
 	}
 }
 
-// Run rebuilds Redis state from Kafka
+// Run rebuilds Redis state from the compacted state topic.
+// The fromBeginning parameter is kept for API compatibility but is ignored
+// because for a compacted topic, we ALWAYS read from the beginning to build
+// the full state table.
 func (r *Reconciler) Run(ctx context.Context, fromBeginning bool) error {
-	log.Info().Bool("from_beginning", fromBeginning).Msg("Starting reconciliation...")
+	// Ignore fromBeginning - we always read from beginning for compacted topics
+	_ = fromBeginning
 
-	// Flush Redis state if starting from beginning
-	if fromBeginning {
-		log.Info().Msg("Flushing Redis state...")
-		if err := r.hotstate.FlushForRebuild(ctx); err != nil {
-			return err
-		}
+	log.Info().Msg("Starting zero-maintenance reconciliation from howk.state topic...")
+
+	// 1. Flush Redis state before rebuilding
+	log.Info().Msg("Flushing Redis active state...")
+	if err := r.hotstate.FlushForRebuild(ctx); err != nil {
+		return fmt.Errorf("flush for rebuild: %w", err)
 	}
 
-	// Create Kafka consumer config
+	// 2. Setup Kafka consumer
 	saramaConfig := sarama.NewConfig()
 	saramaConfig.Consumer.Return.Errors = true
-	if fromBeginning {
-		saramaConfig.Consumer.Offsets.Initial = sarama.OffsetOldest
-	} else {
-		saramaConfig.Consumer.Offsets.Initial = sarama.OffsetNewest
-	}
+	// ALWAYS read from oldest for compacted topics
+	saramaConfig.Consumer.Offsets.Initial = sarama.OffsetOldest
 
-	// Connect to Kafka
 	consumer, err := sarama.NewConsumer(r.config.Brokers, saramaConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("create kafka consumer: %w", err)
 	}
 	defer consumer.Close()
 
-	// Get partition list for results topic
-	partitions, err := consumer.Partitions(r.config.Topics.Results)
+	// 3. Get partitions for state topic
+	partitions, err := consumer.Partitions(r.config.Topics.State)
 	if err != nil {
-		return err
+		return fmt.Errorf("get partitions: %w", err)
 	}
 
-	// Track progress
-	var processedCount int64
+	if len(partitions) == 0 {
+		log.Warn().Msg("No partitions found for state topic, skipping reconciliation")
+		return nil
+	}
+
+	var restoredCount int64
+	var tombstoneCount int64
+	var parseErrorCount int64
 	startTime := time.Now()
 
-	// Process each partition
+	// 4. Consume each partition
 	for _, partition := range partitions {
-		pc, err := consumer.ConsumePartition(r.config.Topics.Results, partition, sarama.OffsetOldest)
-		if err != nil {
-			log.Error().Err(err).Int32("partition", partition).Msg("Failed to consume partition")
+		if err := r.consumePartition(ctx, consumer, partition, &restoredCount, &tombstoneCount, &parseErrorCount); err != nil {
+			if err == context.Canceled {
+				return err
+			}
+			log.Error().Err(err).Int32("partition", partition).Msg("Failed to consume partition, continuing...")
 			continue
 		}
-
-		// Get high water mark to know when we're caught up
-		highWaterMark := pc.HighWaterMarkOffset()
-
-		log.Info().
-			Int32("partition", partition).
-			Int64("high_water_mark", highWaterMark).
-			Msg("Processing partition")
-
-		for msg := range pc.Messages() {
-			// Check context
-			select {
-			case <-ctx.Done():
-				pc.Close()
-				return ctx.Err()
-			default:
-			}
-
-			// Parse delivery result
-			var result domain.DeliveryResult
-			if err := json.Unmarshal(msg.Value, &result); err != nil {
-				log.Warn().Err(err).Msg("Failed to parse result, skipping")
-				continue
-			}
-
-			// Rebuild status
-			if err := r.rebuildStatus(ctx, &result); err != nil {
-				log.Warn().Err(err).Str("webhook_id", string(result.WebhookID)).Msg("Failed to rebuild status")
-			}
-
-			// Rebuild circuit breaker state
-			if err := r.rebuildCircuit(ctx, &result); err != nil {
-				log.Warn().Err(err).Str("endpoint_hash", string(result.EndpointHash)).Msg("Failed to rebuild circuit")
-			}
-
-			// Rebuild stats
-			if err := r.rebuildStats(ctx, &result); err != nil {
-				log.Warn().Err(err).Msg("Failed to rebuild stats")
-			}
-
-			// Schedule retry if needed
-			if result.ShouldRetry && result.Webhook != nil && !result.Success {
-				if err := r.scheduleRetry(ctx, &result); err != nil {
-					log.Warn().Err(err).Str("webhook_id", string(result.WebhookID)).Msg("Failed to schedule retry")
-				}
-			}
-
-			processedCount++
-
-			// Log progress periodically
-			if processedCount%10000 == 0 {
-				log.Info().
-					Int64("processed", processedCount).
-					Dur("elapsed", time.Since(startTime)).
-					Msg("Progress")
-			}
-
-			// Stop when caught up
-			if msg.Offset >= highWaterMark-1 {
-				break
-			}
-		}
-
-		pc.Close()
 	}
 
-	log.Info().
-		Int64("total_processed", processedCount).
-		Dur("duration", time.Since(startTime)).
-		Msg("Reconciliation complete")
-
-	// Set epoch marker after successful completion
+	// 5. Set epoch marker after successful completion
 	hostname, _ := os.Hostname()
 	epoch := &domain.SystemEpoch{
 		Epoch:            time.Now().Unix(),
 		ReconcilerHost:   hostname,
-		MessagesReplayed: processedCount,
+		MessagesReplayed: restoredCount,
 		CompletedAt:      time.Now(),
 	}
 
@@ -159,71 +102,141 @@ func (r *Reconciler) Run(ctx context.Context, fromBeginning bool) error {
 		// Don't fail reconciliation for this
 	}
 
+	log.Info().
+		Int64("restored", restoredCount).
+		Int64("tombstones_skipped", tombstoneCount).
+		Int64("parse_errors", parseErrorCount).
+		Int("partitions", len(partitions)).
+		Dur("duration", time.Since(startTime)).
+		Msg("Zero-maintenance reconciliation complete")
+
 	return nil
 }
 
-func (r *Reconciler) rebuildStatus(ctx context.Context, result *domain.DeliveryResult) error {
-	status := &domain.WebhookStatus{
-		WebhookID:      result.WebhookID,
-		Attempts:       result.Attempt + 1,
-		LastAttemptAt:  &result.Timestamp,
-		LastStatusCode: result.StatusCode,
-		LastError:      result.Error,
+// consumePartition consumes a single partition from the state topic
+func (r *Reconciler) consumePartition(
+	ctx context.Context,
+	consumer sarama.Consumer,
+	partition int32,
+	restoredCount, tombstoneCount, parseErrorCount *int64,
+) error {
+	pc, err := consumer.ConsumePartition(r.config.Topics.State, partition, sarama.OffsetOldest)
+	if err != nil {
+		return fmt.Errorf("consume partition %d: %w", partition, err)
+	}
+	defer pc.Close()
+
+	highWaterMark := pc.HighWaterMarkOffset()
+	if highWaterMark == 0 {
+		log.Info().Int32("partition", partition).Msg("Partition is empty, skipping")
+		return nil
 	}
 
-	if result.Success {
-		status.State = domain.StateDelivered
-		status.DeliveredAt = &result.Timestamp
-	} else if result.ShouldRetry {
-		status.State = domain.StateFailed
-		status.NextRetryAt = &result.NextRetryAt
-	} else {
-		status.State = domain.StateExhausted
-	}
+	log.Info().
+		Int32("partition", partition).
+		Int64("high_water_mark", highWaterMark).
+		Msg("Processing partition")
 
-	return r.hotstate.SetStatus(ctx, status)
-}
+	for msg := range pc.Messages() {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 
-func (r *Reconciler) rebuildCircuit(ctx context.Context, result *domain.DeliveryResult) error {
-	// Just record the outcome - circuit breaker will update its state
-	// Note: This won't perfectly recreate historical circuit states,
-	// but will establish correct current state based on recent results
-	return nil
-}
+		// Handle tombstone (nil value = deletion)
+		if msg.Value == nil || len(msg.Value) == 0 {
+			*tombstoneCount++
+			log.Debug().
+				Str("webhook_id", string(msg.Key)).
+				Msg("Skipping tombstone")
+			continue
+		}
 
-func (r *Reconciler) rebuildStats(ctx context.Context, result *domain.DeliveryResult) error {
-	bucket := result.Timestamp.Format("2006010215")
+		// Parse snapshot
+		var snapshot domain.WebhookStateSnapshot
+		if err := json.Unmarshal(msg.Value, &snapshot); err != nil {
+			*parseErrorCount++
+			log.Warn().
+				Err(err).
+				Str("webhook_id", string(msg.Key)).
+				Int64("offset", msg.Offset).
+				Msg("Failed to parse snapshot, skipping")
+			continue
+		}
 
-	stat := "delivered"
-	if !result.Success {
-		if result.ShouldRetry {
-			stat = "failed"
-		} else {
-			stat = "exhausted"
+		// Restore state from snapshot
+		if err := r.restoreState(ctx, &snapshot); err != nil {
+			log.Error().
+				Err(err).
+				Str("webhook_id", string(snapshot.WebhookID)).
+				Msg("Failed to restore state, continuing")
+			continue
+		}
+
+		*restoredCount++
+
+		// Check AFTER processing if we've reached the high water mark
+		// In a compacted topic, this means we've processed all unique keys
+		if msg.Offset >= highWaterMark-1 {
+			log.Debug().
+				Int32("partition", partition).
+				Int64("offset", msg.Offset).
+				Msg("Reached high water mark")
+			break
 		}
 	}
 
-	if err := r.hotstate.IncrStats(ctx, bucket, map[string]int64{stat: 1}); err != nil {
-		return err
-	}
-
-	return r.hotstate.AddToHLL(ctx, "endpoints:"+bucket, string(result.EndpointHash))
+	return nil
 }
 
-func (r *Reconciler) scheduleRetry(ctx context.Context, result *domain.DeliveryResult) error {
-	// Only schedule if the retry time is in the future
-	if result.NextRetryAt.Before(time.Now()) {
-		// Retry time has passed, re-enqueue immediately
-		result.Webhook.ScheduledAt = time.Now()
-	} else {
-		result.Webhook.ScheduledAt = result.NextRetryAt
+// restoreState restores Redis state from a snapshot
+func (r *Reconciler) restoreState(ctx context.Context, snap *domain.WebhookStateSnapshot) error {
+	// 1. Restore status object
+	status := &domain.WebhookStatus{
+		WebhookID:     snap.WebhookID,
+		State:         snap.State,
+		Attempts:      snap.Attempt + 1, // Attempts in status is 1-based
+		NextRetryAt:   snap.NextRetryAt,
+		LastError:     snap.LastError,
+		LastAttemptAt: &snap.CreatedAt, // Approximate
 	}
 
-	// NEW: Use EnsureRetryData (lazy save - only writes if missing)
-	if err := r.hotstate.EnsureRetryData(ctx, result.Webhook, r.ttlConfig.RetryDataTTL); err != nil {
-		return err
+	if err := r.hotstate.SetStatus(ctx, status); err != nil {
+		return fmt.Errorf("set status: %w", err)
 	}
 
-	// NEW: Use updated ScheduleRetry with separate reference scheduling
-	return r.hotstate.ScheduleRetry(ctx, result.Webhook.ID, result.Webhook.Attempt, result.Webhook.ScheduledAt, "reconciled")
+	// 2. Restore retry schedule if webhook is in failed state (pending retry)
+	if snap.State == domain.StateFailed && snap.NextRetryAt != nil {
+		// Reconstruct webhook for retry scheduling
+		webhook := &domain.Webhook{
+			ID:             snap.WebhookID,
+			ConfigID:       snap.ConfigID,
+			Endpoint:       snap.Endpoint,
+			EndpointHash:   snap.EndpointHash,
+			Payload:        snap.Payload,
+			Headers:        snap.Headers,
+			IdempotencyKey: snap.IdempotencyKey,
+			SigningSecret:  snap.SigningSecret,
+			ScriptHash:     snap.ScriptHash,
+			Attempt:        snap.Attempt,
+			MaxAttempts:    snap.MaxAttempts,
+			CreatedAt:      snap.CreatedAt,
+			ScheduledAt:    *snap.NextRetryAt,
+		}
+
+		// Ensure retry data exists in Redis (compressed)
+		// Use configured TTL for restored items
+		if err := r.hotstate.EnsureRetryData(ctx, webhook, r.ttlConfig.RetryDataTTL); err != nil {
+			return fmt.Errorf("ensure retry data: %w", err)
+		}
+
+		// Schedule in ZSET
+		if err := r.hotstate.ScheduleRetry(ctx, webhook.ID, webhook.Attempt, *snap.NextRetryAt, "reconciled"); err != nil {
+			return fmt.Errorf("schedule retry: %w", err)
+		}
+	}
+
+	return nil
 }

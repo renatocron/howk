@@ -314,6 +314,9 @@ func TestProcessSlowMessage_Success(t *testing.T) {
 	// Result publishing
 	mockPublisher.On("PublishResult", ctx, mock.Anything).Return(nil)
 
+	// State publishing (async, may not complete before test ends)
+	mockPublisher.On("PublishStateTombstone", mock.Anything, webhook.ID).Return(nil).Maybe()
+
 	// Stats recording - processMessage records delivered, processSlowMessage records slow_delivered
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockHotState.On("Client").Return(nil)
@@ -421,6 +424,9 @@ func TestProcessSlowMessage_ProcessError(t *testing.T) {
 
 	// Result publishing
 	mockPublisher.On("PublishResult", ctx, mock.Anything).Return(nil)
+
+	// State publishing (async, may not complete before test ends) - this is a failed state with retry
+	mockPublisher.On("PublishState", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Stats recording (no slow_delivered on error)
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil).Maybe()

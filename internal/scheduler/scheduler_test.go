@@ -203,6 +203,16 @@ func (m *MockPublisher) PublishToSlow(ctx context.Context, webhook *domain.Webho
 	return args.Error(0)
 }
 
+func (m *MockPublisher) PublishState(ctx context.Context, snapshot *domain.WebhookStateSnapshot) error {
+	args := m.Called(ctx, snapshot)
+	return args.Error(0)
+}
+
+func (m *MockPublisher) PublishStateTombstone(ctx context.Context, webhookID domain.WebhookID) error {
+	args := m.Called(ctx, webhookID)
+	return args.Error(0)
+}
+
 func setupSchedulerTest() (*Scheduler, *MockHotState, *MockPublisher) {
 	cfg := config.SchedulerConfig{
 		PollInterval: time.Second,

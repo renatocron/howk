@@ -188,398 +188,245 @@ func (m *MockCircuitBreakerChecker) RecordFailure(ctx context.Context, endpointH
 
 func TestNewReconciler(t *testing.T) {
 	mockHS := new(MockHotState)
+	ttlCfg := config.TTLConfig{RetryDataTTL: time.Hour}
 	cfg := config.KafkaConfig{
 		Brokers: []string{"localhost:9092"},
 		Topics: config.TopicsConfig{
-			Results: "results",
+			State: "howk.state",
 		},
 	}
 
-	r := NewReconciler(cfg, mockHS)
+	r := NewReconciler(cfg, mockHS, ttlCfg)
 
 	assert.NotNil(t, r)
 	assert.Equal(t, cfg, r.config)
 	assert.Equal(t, mockHS, r.hotstate)
+	assert.Equal(t, ttlCfg, r.ttlConfig)
 }
 
-func TestReconciler_rebuildStatus_Success(t *testing.T) {
+func TestReconciler_restoreState_FailedWithRetry(t *testing.T) {
 	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
-	now := time.Now()
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      true,
-		Attempt:      2,
-		Timestamp:    now,
-		StatusCode:   200,
-		EndpointHash: "abc123",
+	ttlCfg := config.TTLConfig{RetryDataTTL: time.Hour}
+	r := &Reconciler{
+		hotstate:  mockHS,
+		ttlConfig: ttlCfg,
 	}
-
-	mockHS.On("SetStatus", mock.Anything, mock.MatchedBy(func(s *domain.WebhookStatus) bool {
-		return s.State == domain.StateDelivered &&
-			s.Attempts == 3 &&
-			s.DeliveredAt != nil &&
-			s.LastStatusCode == 200
-	})).Return(nil)
-
-	err := r.rebuildStatus(context.Background(), result)
-	assert.NoError(t, err)
-	mockHS.AssertExpectations(t)
-}
-
-func TestReconciler_rebuildStatus_FailedRetryable(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
 
 	now := time.Now()
 	nextRetry := now.Add(time.Minute)
 	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
+
+	snapshot := &domain.WebhookStateSnapshot{
 		WebhookID:    webhookID,
-		Success:      false,
-		ShouldRetry:  true,
+		ConfigID:     "config-123",
+		Endpoint:     "https://example.com/webhook",
+		EndpointHash: "abc123",
+		Payload:      json.RawMessage(`{"key":"value"}`),
+		Headers:      map[string]string{"Content-Type": "application/json"},
+		State:        domain.StateFailed,
+		Attempt:      2,
+		MaxAttempts:  10,
+		CreatedAt:    now,
+		NextRetryAt:  &nextRetry,
+		LastError:    "connection timeout",
+	}
+
+	// Expect SetStatus to be called
+	mockHS.On("SetStatus", mock.Anything, mock.MatchedBy(func(s *domain.WebhookStatus) bool {
+		return s.WebhookID == webhookID &&
+			s.State == domain.StateFailed &&
+			s.Attempts == 3 && // 1-based
+			s.LastError == "connection timeout"
+	})).Return(nil)
+
+	// Expect EnsureRetryData to be called with configured TTL
+	mockHS.On("EnsureRetryData", mock.Anything, mock.Anything, time.Hour).Return(nil)
+
+	// Expect ScheduleRetry to be called
+	mockHS.On("ScheduleRetry", mock.Anything, webhookID, 2, nextRetry, "reconciled").Return(nil)
+
+	err := r.restoreState(context.Background(), snapshot)
+	assert.NoError(t, err)
+	mockHS.AssertExpectations(t)
+}
+
+func TestReconciler_restoreState_Delivered(t *testing.T) {
+	mockHS := new(MockHotState)
+	ttlCfg := config.TTLConfig{RetryDataTTL: time.Hour}
+	r := &Reconciler{
+		hotstate:  mockHS,
+		ttlConfig: ttlCfg,
+	}
+
+	now := time.Now()
+	webhookID := domain.WebhookID(ulid.Make().String())
+
+	snapshot := &domain.WebhookStateSnapshot{
+		WebhookID:    webhookID,
+		ConfigID:     "config-123",
+		Endpoint:     "https://example.com/webhook",
+		EndpointHash: "abc123",
+		Payload:      json.RawMessage(`{"key":"value"}`),
+		State:        domain.StateDelivered,
 		Attempt:      1,
-		Timestamp:    now,
-		NextRetryAt:  nextRetry,
-		StatusCode:   500,
-		Error:        "server error",
-		EndpointHash: "abc123",
+		MaxAttempts:  10,
+		CreatedAt:    now,
 	}
 
+	// Expect only SetStatus to be called (no retry scheduling for terminal states)
 	mockHS.On("SetStatus", mock.Anything, mock.MatchedBy(func(s *domain.WebhookStatus) bool {
-		return s.State == domain.StateFailed &&
-			s.Attempts == 2 &&
-			s.NextRetryAt != nil &&
-			s.LastStatusCode == 500 &&
-			s.LastError == "server error"
+		return s.WebhookID == webhookID && s.State == domain.StateDelivered
 	})).Return(nil)
 
-	err := r.rebuildStatus(context.Background(), result)
+	err := r.restoreState(context.Background(), snapshot)
 	assert.NoError(t, err)
 	mockHS.AssertExpectations(t)
 }
 
-func TestReconciler_rebuildStatus_Exhausted(t *testing.T) {
+func TestReconciler_restoreState_SetStatusError(t *testing.T) {
 	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
-	now := time.Now()
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      false,
-		ShouldRetry:  false,
-		Attempt:      4,
-		Timestamp:    now,
-		StatusCode:   400,
-		Error:        "bad request",
-		EndpointHash: "abc123",
+	ttlCfg := config.TTLConfig{RetryDataTTL: time.Hour}
+	r := &Reconciler{
+		hotstate:  mockHS,
+		ttlConfig: ttlCfg,
 	}
 
-	mockHS.On("SetStatus", mock.Anything, mock.MatchedBy(func(s *domain.WebhookStatus) bool {
-		return s.State == domain.StateExhausted &&
-			s.Attempts == 5 &&
-			s.LastStatusCode == 400
-	})).Return(nil)
-
-	err := r.rebuildStatus(context.Background(), result)
-	assert.NoError(t, err)
-	mockHS.AssertExpectations(t)
-}
-
-func TestReconciler_rebuildStatus_SetStatusError(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
 	now := time.Now()
 	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      true,
-		Attempt:      0,
-		Timestamp:    now,
-		EndpointHash: "abc123",
+
+	snapshot := &domain.WebhookStateSnapshot{
+		WebhookID:   webhookID,
+		State:       domain.StateFailed,
+		Attempt:     1,
+		MaxAttempts: 10,
+		CreatedAt:   now,
+		NextRetryAt: &now,
 	}
 
 	mockHS.On("SetStatus", mock.Anything, mock.Anything).Return(errors.New("redis error"))
 
-	err := r.rebuildStatus(context.Background(), result)
+	err := r.restoreState(context.Background(), snapshot)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "redis error")
 }
 
-func TestReconciler_rebuildCircuit(t *testing.T) {
+func TestReconciler_restoreState_EnsureRetryDataError(t *testing.T) {
 	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		EndpointHash: "abc123",
-		Success:      true,
-	}
-
-	// rebuildCircuit currently returns nil without doing anything
-	err := r.rebuildCircuit(context.Background(), result)
-	assert.NoError(t, err)
-}
-
-func TestReconciler_rebuildStats_Delivered(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
-	now := time.Now()
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      true,
-		Timestamp:    now,
-		EndpointHash: "abc123",
-	}
-
-	bucket := now.Format("2006010215")
-	mockHS.On("IncrStats", mock.Anything, bucket, map[string]int64{"delivered": 1}).Return(nil)
-	mockHS.On("AddToHLL", mock.Anything, "endpoints:"+bucket, []string{"abc123"}).Return(nil)
-
-	err := r.rebuildStats(context.Background(), result)
-	assert.NoError(t, err)
-	mockHS.AssertExpectations(t)
-}
-
-func TestReconciler_rebuildStats_Failed(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
-	now := time.Now()
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      false,
-		ShouldRetry:  true,
-		Timestamp:    now,
-		EndpointHash: "abc123",
-	}
-
-	bucket := now.Format("2006010215")
-	mockHS.On("IncrStats", mock.Anything, bucket, map[string]int64{"failed": 1}).Return(nil)
-	mockHS.On("AddToHLL", mock.Anything, "endpoints:"+bucket, []string{"abc123"}).Return(nil)
-
-	err := r.rebuildStats(context.Background(), result)
-	assert.NoError(t, err)
-	mockHS.AssertExpectations(t)
-}
-
-func TestReconciler_rebuildStats_Exhausted(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
-	now := time.Now()
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      false,
-		ShouldRetry:  false,
-		Timestamp:    now,
-		EndpointHash: "abc123",
-	}
-
-	bucket := now.Format("2006010215")
-	mockHS.On("IncrStats", mock.Anything, bucket, map[string]int64{"exhausted": 1}).Return(nil)
-	mockHS.On("AddToHLL", mock.Anything, "endpoints:"+bucket, []string{"abc123"}).Return(nil)
-
-	err := r.rebuildStats(context.Background(), result)
-	assert.NoError(t, err)
-	mockHS.AssertExpectations(t)
-}
-
-func TestReconciler_rebuildStats_IncrStatsError(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
-	now := time.Now()
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      true,
-		Timestamp:    now,
-		EndpointHash: "abc123",
-	}
-
-	bucket := now.Format("2006010215")
-	mockHS.On("IncrStats", mock.Anything, bucket, mock.Anything).Return(errors.New("stats error"))
-
-	err := r.rebuildStats(context.Background(), result)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "stats error")
-}
-
-func TestReconciler_scheduleRetry_FutureRetry(t *testing.T) {
-	mockHS := new(MockHotState)
+	ttlCfg := config.TTLConfig{RetryDataTTL: time.Hour}
 	r := &Reconciler{
 		hotstate:  mockHS,
-		ttlConfig: config.TTLConfig{RetryDataTTL: time.Hour},
+		ttlConfig: ttlCfg,
 	}
 
-	futureRetry := time.Now().Add(time.Hour)
+	now := time.Now()
+	nextRetry := now.Add(time.Minute)
 	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
+
+	snapshot := &domain.WebhookStateSnapshot{
 		WebhookID:   webhookID,
-		Success:     false,
-		ShouldRetry: true,
-		Webhook: &domain.Webhook{
-			ID:      webhookID,
-			Attempt: 2,
-		},
-		NextRetryAt: futureRetry,
+		State:       domain.StateFailed,
+		Attempt:     1,
+		MaxAttempts: 10,
+		CreatedAt:   now,
+		NextRetryAt: &nextRetry,
 	}
 
-	mockHS.On("EnsureRetryData", mock.Anything, mock.Anything, time.Hour).Return(nil)
-	mockHS.On("ScheduleRetry", mock.Anything, webhookID, 2, futureRetry, "reconciled").Return(nil)
-
-	err := r.scheduleRetry(context.Background(), result)
-	assert.NoError(t, err)
-	mockHS.AssertExpectations(t)
-}
-
-func TestReconciler_scheduleRetry_PastRetry(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{
-		hotstate:  mockHS,
-		ttlConfig: config.TTLConfig{RetryDataTTL: time.Hour},
-	}
-
-	pastRetry := time.Now().Add(-time.Hour) // Already in the past
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:   webhookID,
-		Success:     false,
-		ShouldRetry: true,
-		Webhook: &domain.Webhook{
-			ID:      webhookID,
-			Attempt: 2,
-		},
-		NextRetryAt: pastRetry,
-	}
-
-	// When retry is in the past, it should schedule for "now" (approximately)
-	mockHS.On("EnsureRetryData", mock.Anything, mock.Anything, time.Hour).Return(nil)
-	mockHS.On("ScheduleRetry", mock.Anything, webhookID, 2, mock.MatchedBy(func(t time.Time) bool {
-		// Should be scheduled for now (or very close to it)
-		return time.Since(t) < time.Second
-	}), "reconciled").Return(nil)
-
-	err := r.scheduleRetry(context.Background(), result)
-	assert.NoError(t, err)
-	mockHS.AssertExpectations(t)
-}
-
-func TestReconciler_scheduleRetry_EnsureRetryDataError(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{
-		hotstate:  mockHS,
-		ttlConfig: config.TTLConfig{RetryDataTTL: time.Hour},
-	}
-
-	futureRetry := time.Now().Add(time.Hour)
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:   webhookID,
-		Success:     false,
-		ShouldRetry: true,
-		Webhook: &domain.Webhook{
-			ID: webhookID,
-		},
-		NextRetryAt: futureRetry,
-	}
-
+	mockHS.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
 	mockHS.On("EnsureRetryData", mock.Anything, mock.Anything, time.Hour).Return(errors.New("redis error"))
 
-	err := r.scheduleRetry(context.Background(), result)
+	err := r.restoreState(context.Background(), snapshot)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "redis error")
 }
 
-func TestReconciler_scheduleRetry_ScheduleRetryError(t *testing.T) {
+func TestReconciler_restoreState_ScheduleRetryError(t *testing.T) {
 	mockHS := new(MockHotState)
+	ttlCfg := config.TTLConfig{RetryDataTTL: time.Hour}
 	r := &Reconciler{
 		hotstate:  mockHS,
-		ttlConfig: config.TTLConfig{RetryDataTTL: time.Hour},
+		ttlConfig: ttlCfg,
 	}
 
-	futureRetry := time.Now().Add(time.Hour)
+	now := time.Now()
+	nextRetry := now.Add(time.Minute)
 	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
+
+	snapshot := &domain.WebhookStateSnapshot{
 		WebhookID:   webhookID,
-		Success:     false,
-		ShouldRetry: true,
-		Webhook: &domain.Webhook{
-			ID: webhookID,
-		},
-		NextRetryAt: futureRetry,
+		State:       domain.StateFailed,
+		Attempt:     1,
+		MaxAttempts: 10,
+		CreatedAt:   now,
+		NextRetryAt: &nextRetry,
 	}
 
+	mockHS.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
 	mockHS.On("EnsureRetryData", mock.Anything, mock.Anything, time.Hour).Return(nil)
-	mockHS.On("ScheduleRetry", mock.Anything, mock.Anything, mock.Anything, mock.Anything, "reconciled").Return(errors.New("schedule error"))
+	mockHS.On("ScheduleRetry", mock.Anything, webhookID, 1, nextRetry, "reconciled").Return(errors.New("schedule error"))
 
-	err := r.scheduleRetry(context.Background(), result)
+	err := r.restoreState(context.Background(), snapshot)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "schedule error")
 }
 
-func TestReconciler_rebuildStats_AddToHLLError(t *testing.T) {
-	mockHS := new(MockHotState)
-	r := &Reconciler{hotstate: mockHS}
-
+func TestWebhookStateSnapshot_JSONSerialization(t *testing.T) {
 	now := time.Now()
-	webhookID := domain.WebhookID(ulid.Make().String())
-	result := &domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      true,
-		Timestamp:    now,
-		EndpointHash: "abc123",
-	}
-
-	bucket := now.Format("2006010215")
-	mockHS.On("IncrStats", mock.Anything, bucket, mock.Anything).Return(nil)
-	mockHS.On("AddToHLL", mock.Anything, "endpoints:"+bucket, mock.Anything).Return(errors.New("hll error"))
-
-	err := r.rebuildStats(context.Background(), result)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "hll error")
-}
-
-func TestDeliveryResult_JSONSerialization(t *testing.T) {
-	now := time.Now()
+	nextRetry := now.Add(time.Minute)
 	webhookID := domain.WebhookID(ulid.Make().String())
 
-	result := domain.DeliveryResult{
-		WebhookID:    webhookID,
-		Success:      true,
-		StatusCode:   200,
-		Attempt:      2,
-		Timestamp:    now,
-		EndpointHash: "abc123",
-		ShouldRetry:  false,
-		Webhook: &domain.Webhook{
-			ID:      webhookID,
-			Attempt: 3,
-		},
+	snapshot := domain.WebhookStateSnapshot{
+		WebhookID:      webhookID,
+		ConfigID:       "config-123",
+		Endpoint:       "https://example.com/webhook",
+		EndpointHash:   "abc123",
+		Payload:        json.RawMessage(`{"key":"value"}`),
+		Headers:        map[string]string{"Content-Type": "application/json"},
+		IdempotencyKey: "idem-key-123",
+		SigningSecret:  "secret-123",
+		ScriptHash:     "hash-123",
+		State:          domain.StateFailed,
+		Attempt:        3,
+		MaxAttempts:    10,
+		CreatedAt:      now,
+		NextRetryAt:    &nextRetry,
+		LastError:      "connection timeout",
 	}
 
 	// Test JSON marshaling/unmarshaling
-	data, err := json.Marshal(result)
+	data, err := json.Marshal(snapshot)
 	assert.NoError(t, err)
 
-	var unmarshaled domain.DeliveryResult
+	var unmarshaled domain.WebhookStateSnapshot
 	err = json.Unmarshal(data, &unmarshaled)
 	assert.NoError(t, err)
 
-	assert.Equal(t, result.WebhookID, unmarshaled.WebhookID)
-	assert.Equal(t, result.Success, unmarshaled.Success)
-	assert.Equal(t, result.StatusCode, unmarshaled.StatusCode)
-	assert.Equal(t, result.Attempt, unmarshaled.Attempt)
-	assert.Equal(t, result.EndpointHash, unmarshaled.EndpointHash)
-	assert.Equal(t, result.ShouldRetry, unmarshaled.ShouldRetry)
+	assert.Equal(t, snapshot.WebhookID, unmarshaled.WebhookID)
+	assert.Equal(t, snapshot.ConfigID, unmarshaled.ConfigID)
+	assert.Equal(t, snapshot.Endpoint, unmarshaled.Endpoint)
+	assert.Equal(t, snapshot.EndpointHash, unmarshaled.EndpointHash)
+	assert.Equal(t, snapshot.Payload, unmarshaled.Payload)
+	assert.Equal(t, snapshot.Headers, unmarshaled.Headers)
+	assert.Equal(t, snapshot.IdempotencyKey, unmarshaled.IdempotencyKey)
+	assert.Equal(t, snapshot.SigningSecret, unmarshaled.SigningSecret)
+	assert.Equal(t, snapshot.ScriptHash, unmarshaled.ScriptHash)
+	assert.Equal(t, snapshot.State, unmarshaled.State)
+	assert.Equal(t, snapshot.Attempt, unmarshaled.Attempt)
+	assert.Equal(t, snapshot.MaxAttempts, unmarshaled.MaxAttempts)
+	assert.WithinDuration(t, snapshot.CreatedAt, unmarshaled.CreatedAt, time.Millisecond)
+	assert.NotNil(t, unmarshaled.NextRetryAt)
+	assert.WithinDuration(t, *snapshot.NextRetryAt, *unmarshaled.NextRetryAt, time.Millisecond)
+	assert.Equal(t, snapshot.LastError, unmarshaled.LastError)
+}
+
+func TestWebhookStateSnapshot_Tombstone(t *testing.T) {
+	// Test that nil value represents a tombstone
+	var nilSnapshot *domain.WebhookStateSnapshot
+	assert.Nil(t, nilSnapshot)
+
+	// Test unmarshaling nil value (empty bytes)
+	var snapshot domain.WebhookStateSnapshot
+	err := json.Unmarshal([]byte("null"), &snapshot)
+	// "null" JSON results in zero values
+	assert.NoError(t, err)
+	assert.Empty(t, snapshot.WebhookID)
 }

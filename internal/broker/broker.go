@@ -44,6 +44,14 @@ type WebhookPublisher interface {
 	// Uses ConfigID as the partition key for ordering.
 	PublishToSlow(ctx context.Context, webhook *domain.Webhook) error
 
+	// PublishState publishes a webhook state snapshot to the compacted state topic.
+	// Used for zero-maintenance reconciliation.
+	PublishState(ctx context.Context, snapshot *domain.WebhookStateSnapshot) error
+
+	// PublishStateTombstone publishes a tombstone (nil value) to the state topic
+	// to indicate that a webhook has reached a terminal state.
+	PublishStateTombstone(ctx context.Context, webhookID domain.WebhookID) error
+
 	Close() error
 }
 

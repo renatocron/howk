@@ -175,3 +175,31 @@ type SystemEpoch struct {
 	MessagesReplayed int64     `json:"messages_replayed"`
 	CompletedAt      time.Time `json:"completed_at"`
 }
+
+// WebhookStateSnapshot represents the full state of an active webhook
+// stored in the compacted topic (howk.state). This enables "zero maintenance"
+// reconciliation - Redis can be rebuilt entirely from Kafka on startup.
+type WebhookStateSnapshot struct {
+	// Identity
+	WebhookID    WebhookID    `json:"webhook_id"`
+	ConfigID     ConfigID     `json:"config_id"`
+	Endpoint     string       `json:"endpoint"`
+	EndpointHash EndpointHash `json:"endpoint_hash"`
+
+	// Request Data (Required to reconstruct the call)
+	Payload        json.RawMessage   `json:"payload"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	IdempotencyKey string            `json:"idempotency_key,omitempty"`
+	SigningSecret  string            `json:"signing_secret,omitempty"`
+	ScriptHash     string            `json:"script_hash,omitempty"`
+
+	// State Info
+	State       string    `json:"state"`
+	Attempt     int       `json:"attempt"`
+	MaxAttempts int       `json:"max_attempts"`
+	CreatedAt   time.Time `json:"created_at"`
+
+	// Scheduling
+	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
+	LastError   string     `json:"last_error,omitempty"`
+}

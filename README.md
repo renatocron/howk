@@ -7,7 +7,7 @@ A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis
 ## Philosophy
 
 - **Kafka is the source of truth** — every webhook and delivery result is a Kafka record
-- **Redis is rebuildable hot state** — if Redis dies, replay from Kafka
+- **Redis is rebuildable hot state** — if Redis dies, restore from compacted topic (zero maintenance)
 - **Circuit breakers protect endpoints** — failing endpoints don't burn your retry budget
 - **Penalty box isolates slow endpoints** — excess in-flight traffic is rate-limited to protect the fast lane
 - **At-least-once delivery** — we never lose a webhook, duplicates are the receiver's problem
@@ -88,6 +88,7 @@ flowchart TB
         SLOW[("howk.slow<br/>Rate-limited lane")]
         RESULTS[("howk.results")]
         DLQ[("howk.deadletter")]
+        STATE[("howk.state<br/>Compacted topic<br/>Active webhook state")]
     end
 
     subgraph Redis["Redis Keys"]
@@ -692,15 +693,25 @@ Response:
 
 ## Recovery
 
-### Redis Dies
+### Redis Dies (Zero Maintenance Recovery)
 
 1. Redis comes back (empty or stale)
-2. Run reconciler: `howk-reconciler --from-beginning`
-3. Reconciler replays `howk.pending` and `howk.results` topics
-4. Rebuilds: circuit breaker states, retry queue, status hashes, stats
-5. Normal operation resumes
+2. Run reconciler: `howk-reconciler`
+3. Reconciler consumes `howk.state` compacted topic:
+   - Always reads from beginning (compacted topic semantics)
+   - Skips tombstones (terminal states)
+   - Restores status and retry schedules from active snapshots
+4. Normal operation resumes
+
+**Why this works:**
+- Workers continuously publish state snapshots to `howk.state` topic
+- Failed webhooks (pending retry) → full state snapshot published
+- Terminal webhooks (delivered/exhausted) → tombstone published
+- Kafka compaction retains only the latest state per webhook
 
 **During rebuild:** Workers keep delivering (Kafka is the queue). Status queries return "rebuilding".
+
+**No data loss:** Redis state is fully reconstructible from Kafka's compacted topic.
 
 ### Kafka Broker Dies
 

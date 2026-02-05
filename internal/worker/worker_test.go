@@ -74,6 +74,16 @@ func (m *MockPublisher) PublishToSlow(ctx context.Context, webhook *domain.Webho
 	return args.Error(0)
 }
 
+func (m *MockPublisher) PublishState(ctx context.Context, snapshot *domain.WebhookStateSnapshot) error {
+	args := m.Called(ctx, snapshot)
+	return args.Error(0)
+}
+
+func (m *MockPublisher) PublishStateTombstone(ctx context.Context, webhookID domain.WebhookID) error {
+	args := m.Called(ctx, webhookID)
+	return args.Error(0)
+}
+
 // MockHotState implements hotstate.HotState
 type MockHotState struct {
 	mock.Mock
@@ -321,6 +331,10 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 		Return(int64(1), nil).Maybe()
 	mockHotState.On("DecrInflight", mock.Anything, mock.Anything).
 		Return(nil).Maybe()
+
+	// Default: state publishing (async, may not complete before test ends)
+	mockPublisher.On("PublishState", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockPublisher.On("PublishStateTombstone", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Create a test script engine with disabled config (scripts won't execute)
 	testScriptLoader := script.NewLoader()
