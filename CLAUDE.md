@@ -430,14 +430,25 @@ config.opt_out_default_headers  -- bool: skip X-Webhook-* headers
 - Use `miniredis` for Redis mocking
 - No external dependencies
 - Fast execution (< 5 seconds total)
+- Mark with `//go:build !integration` to exclude from short runs
 
 ```go
+//go:build !integration
+
 func TestSomething(t *testing.T) {
     // Use miniredis
     s := miniredis.RunT(&t)
     defer s.Close()
 
     // Test logic
+}
+```
+
+**Testing Private Functions:** For complex private functions, export a test helper:
+```go
+// In production code (slow.go)
+func (sw *SlowWorker) ProcessSlowMessageForTest(ctx context.Context, msg *broker.Message) error {
+    return sw.processSlowMessage(ctx, msg)
 }
 ```
 
@@ -553,6 +564,7 @@ make test-stats
 | Add Lua module | `internal/script/modules/*.go` |
 | Add HTTP handler | `internal/api/h_*.go` |
 | Add integration test | `internal/{pkg}/*_integration_test.go` |
+| Add unit test | `internal/{pkg}/*_test.go` (with `//go:build !integration`) |
 
 ## Common Gotchas
 
