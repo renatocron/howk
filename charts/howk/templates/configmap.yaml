@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "howk.fullname" . }}-config
+  labels:
+    {{- include "howk.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    api:
+      port: {{ .Values.config.api.port }}
+      read_timeout: {{ .Values.config.api.readTimeout | quote }}
+      write_timeout: {{ .Values.config.api.writeTimeout | quote }}
+      max_request_size: {{ .Values.config.api.maxRequestSize }}
+
+    kafka:
+      brokers:
+{{- range .Values.externalServices.kafka.brokers }}
+        - {{ . }}
+{{- end }}
+      topics:
+        pending: {{ .Values.config.kafka.topics.pending }}
+        results: {{ .Values.config.kafka.topics.results }}
+        deadletter: {{ .Values.config.kafka.topics.deadletter }}
+        scripts: {{ .Values.config.kafka.topics.scripts }}
+        slow: {{ .Values.config.kafka.topics.slow }}
+        state: {{ .Values.config.kafka.topics.state }}
+      consumer_group: {{ .Values.config.kafka.consumerGroup }}
+      retention: {{ .Values.config.kafka.retention | quote }}
+      producer_batch_size: {{ .Values.config.kafka.producerBatchSize }}
+      producer_linger_ms: {{ .Values.config.kafka.producerLingerMs }}
+      producer_compression: {{ .Values.config.kafka.producerCompression }}
+
+    redis:
+      addr: {{ .Values.externalServices.redis.addr | quote }}
+      password: {{ .Values.externalServices.redis.password | quote }}
+      db: 0
+      pool_size: {{ .Values.config.redis.poolSize }}
+      min_idle_conns: {{ .Values.config.redis.minIdleConns }}
+      dial_timeout: {{ .Values.config.redis.dialTimeout | quote }}
+      read_timeout: {{ .Values.config.redis.readTimeout | quote }}
+      write_timeout: {{ .Values.config.redis.writeTimeout | quote }}
+
+    delivery:
+      timeout: {{ .Values.config.delivery.timeout | quote }}
+      max_idle_conns: {{ .Values.config.delivery.maxIdleConns }}
+      max_conns_per_host: {{ .Values.config.delivery.maxConnsPerHost }}
+
+    retry:
+      base_delay: {{ .Values.config.retry.baseDelay | quote }}
+      max_delay: {{ .Values.config.retry.maxDelay | quote }}
+      max_attempts: {{ .Values.config.retry.maxAttempts }}
+      jitter: {{ .Values.config.retry.jitter }}
+
+    circuit_breaker:
+      failure_threshold: {{ .Values.config.circuitBreaker.failureThreshold }}
+      failure_window: {{ .Values.config.circuitBreaker.failureWindow | quote }}
+      recovery_timeout: {{ .Values.config.circuitBreaker.recoveryTimeout | quote }}
+      probe_interval: {{ .Values.config.circuitBreaker.probeInterval | quote }}
+      success_threshold: {{ .Values.config.circuitBreaker.successThreshold }}
+
+    scheduler:
+      poll_interval: {{ .Values.config.scheduler.pollInterval | quote }}
+      batch_size: {{ .Values.config.scheduler.batchSize }}
+      lock_timeout: {{ .Values.config.scheduler.lockTimeout | quote }}
+
+    concurrency:
+      max_inflight_per_endpoint: {{ .Values.config.concurrency.maxInflightPerEndpoint }}
+      inflight_ttl: {{ .Values.config.concurrency.inflightTTL | quote }}
+      slow_lane_rate: {{ .Values.config.concurrency.slowLaneRate }}
+
+    ttl:
+      circuit_state_ttl: {{ .Values.config.ttl.circuitStateTTL | quote }}
+      status_ttl: {{ .Values.config.ttl.statusTTL | quote }}
+      stats_ttl: {{ .Values.config.ttl.statsTTL | quote }}
+      idempotency_ttl: {{ .Values.config.ttl.idempotencyTTL | quote }}
+      retry_data_ttl: {{ .Values.config.ttl.retryDataTTL | quote }}
+
+    lua:
+      enabled: {{ .Values.config.lua.enabled }}
+      timeout: {{ .Values.config.lua.timeout | quote }}
+      memory_limit_mb: {{ .Values.config.lua.memoryLimitMb }}

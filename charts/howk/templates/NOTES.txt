@@ -1,0 +1,36 @@
+HOWK installed!
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+## Prerequisites Check
+
+Verify Redis:
+  kubectl run redis-check --rm -it --image=redis:7-alpine -- \
+    redis-cli -h {{ (split ":" .Values.externalServices.redis.addr)._0 }} \
+    -p {{ (split ":" .Values.externalServices.redis.addr)._1 | default "6379" }} PING
+
+Verify Kafka:
+  kubectl run kafka-check --rm -it --image=confluentinc/cp-kafkacat:latest -- \
+    kafkacat -b {{ join "," .Values.externalServices.kafka.brokers }} -L
+
+## Access API
+
+kubectl port-forward svc/{{ include "howk.fullname" . }}-api 8080:8080 -n {{ .Release.Namespace }}
+
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+
+## Send Test Webhook
+
+curl -X POST http://localhost:8080/webhooks/test/enqueue \
+  -H "Content-Type: application/json" \
+  -d '{"endpoint":"https://httpbin.org/post","payload":{"test":true}}'
+
+## Scale Up
+
+kubectl scale deployment/{{ include "howk.fullname" . }}-worker --replicas=3 -n {{ .Release.Namespace }}
+
+## Uninstall
+
+helm uninstall {{ .Release.Name }} -n {{ .Release.Namespace }}

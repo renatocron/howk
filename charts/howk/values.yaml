@@ -1,0 +1,190 @@
+# Default values for HOWK.
+# Reference: Benchmarked at ~500 RPS with these defaults.
+
+# External Dependencies (REQUIRED)
+# HOWK requires Redis and Kafka to be provided externally.
+# Install them separately before deploying HOWK.
+#
+# Quick start (Bitnami charts):
+#   helm install redis oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=false
+#   helm install kafka oci://registry-1.docker.io/bitnamicharts/kafka --set replicaCount=1
+#
+# Or use Redpanda for simpler Kafka:
+#   helm install redpanda redpanda/redpanda --set statefulset.replicas=1
+#
+externalServices:
+  redis:
+    addr: "redis-master:6379"   # Redis host:port
+    password: ""                 # Redis password (if auth enabled)
+    db: 0
+  
+  kafka:
+    brokers:
+      - "kafka:9092"            # Kafka broker list
+
+# Image configuration
+images:
+  api:
+    repository: renatocron/howk-api
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+  worker:
+    repository: renatocron/howk-worker
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+  scheduler:
+    repository: renatocron/howk-scheduler
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+  reconciler:
+    repository: renatocron/howk-reconciler
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+
+# API Service
+api:
+  replicaCount: 1
+  
+  service:
+    type: ClusterIP
+    port: 8080
+    # nodePort: 30080  # Uncomment for NodePort
+  
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  
+  livenessProbe:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  
+  readinessProbe:
+    path: /ready
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  
+  ingress:
+    enabled: false
+    # hosts:
+    #   - host: howk.example.com
+
+# Worker
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "1000m"
+
+# Scheduler
+scheduler:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+
+# Reconciler
+reconciler:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+
+# HOWK Configuration
+config:
+  api:
+    port: 8080
+    readTimeout: "10s"
+    writeTimeout: "10s"
+    maxRequestSize: 1048576  # 1MB
+
+  kafka:
+    topics:
+      pending: howk.pending
+      results: howk.results
+      deadletter: howk.deadletter
+      scripts: howk.scripts
+      slow: howk.slow
+      state: howk.state
+    consumerGroup: howk-workers
+    retention: "168h"
+    producerBatchSize: 32768   # 32KB batches
+    producerLingerMs: 50       # 50ms batching
+    producerCompression: snappy
+
+  redis:
+    poolSize: 100
+    minIdleConns: 10
+    dialTimeout: "5s"
+    readTimeout: "3s"
+    writeTimeout: "3s"
+
+  delivery:
+    timeout: "30s"
+    maxIdleConns: 100
+    maxConnsPerHost: 10
+
+  retry:
+    baseDelay: "10s"
+    maxDelay: "24h"
+    maxAttempts: 20
+    jitter: 0.2
+
+  circuitBreaker:
+    failureThreshold: 5
+    failureWindow: "60s"
+    recoveryTimeout: "5m"
+    probeInterval: "60s"
+    successThreshold: 2
+
+  scheduler:
+    pollInterval: "1s"
+    batchSize: 500
+    lockTimeout: "30s"
+
+  concurrency:
+    maxInflightPerEndpoint: 50
+    inflightTTL: "60s"
+    slowLaneRate: 10
+
+  ttl:
+    circuitStateTTL: "24h"
+    statusTTL: "168h"
+    statsTTL: "48h"
+    idempotencyTTL: "24h"
+    retryDataTTL: "48h"
+
+  lua:
+    enabled: false
+
+# Optional: Image pull secrets for private registries
+global:
+  imagePullSecrets: []
+  # - name: regcred
+
+# Service account
+serviceAccount:
+  create: true
+
+# Node placement
+nodeSelector: {}
+tolerations: []
+affinity: {}
