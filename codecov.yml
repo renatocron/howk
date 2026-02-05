@@ -33,8 +33,62 @@ parsers:
       macro: no
 
 comment:
-  layout: "reach,diff,flags,tree"
+  layout: "reach,diff,flags,components,tree"
   behavior: default
   require_changes: false
   require_base: false
   require_head: true
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+        branches:
+          - "!main"
+
+  individual_components:
+    - component_id: core
+      name: Core (domain, config, bootstrap)
+      paths:
+        - internal/domain/**
+        - internal/config/**
+        - internal/app/**
+
+    - component_id: broker
+      name: Broker (Kafka)
+      paths:
+        - internal/broker/**
+
+    - component_id: hotstate
+      name: HotState (Redis)
+      paths:
+        - internal/hotstate/**
+
+    - component_id: delivery
+      name: Delivery Pipeline
+      paths:
+        - internal/worker/**
+        - internal/delivery/**
+        - internal/retry/**
+        - internal/circuit/**
+
+    - component_id: scheduler
+      name: Scheduler
+      paths:
+        - internal/scheduler/**
+
+    - component_id: api
+      name: API (HTTP)
+      paths:
+        - internal/api/**
+
+    - component_id: scripting
+      name: Scripting (Lua)
+      paths:
+        - internal/script/**
+
+    - component_id: reconciler
+      name: Reconciler
+      paths:
+        - internal/reconciler/**
