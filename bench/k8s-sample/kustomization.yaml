@@ -1,0 +1,64 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: howk
+
+resources:
+  - 00-namespace.yaml
+  - 01-configmap.yaml
+  - 10-redis.yaml
+  - 11-redpanda.yaml
+  - 12-topics-init.yaml
+  - 20-api.yaml
+  - 21-worker.yaml
+  - 22-scheduler.yaml
+  - 23-reconciler.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: howk
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: true
+
+images:
+  - name: howk
+    newName: registry.example.com/user/howk
+  - name: howk:api-latest
+    newName: registry.example.com/user/howk
+    newTag: api-latest
+  - name: howk:worker-latest
+    newName: registry.example.com/user/howk
+    newTag: worker-latest
+  - name: howk:scheduler-latest
+    newName: registry.example.com/user/howk
+    newTag: scheduler-latest
+  - name: howk:reconciler-latest
+    newName: registry.example.com/user/howk
+    newTag: reconciler-latest
+
+# Add imagePullSecrets to all deployments
+patches:
+  - target:
+      kind: Deployment
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ignored
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: registry-user
+  - target:
+      kind: Job
+    patch: |
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: ignored
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: registry-user

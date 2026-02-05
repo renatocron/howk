@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redpanda-topics-init
+  namespace: howk
+  labels:
+    app.kubernetes.io/name: redpanda-topics-init
+    app.kubernetes.io/component: init
+    app.kubernetes.io/part-of: howk
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redpanda-topics-init
+        app.kubernetes.io/component: init
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-redpanda
+          image: docker.redpanda.com/redpandadata/redpanda:v25.3.6
+          env:
+            - name: REDPANDA_BROKERS
+              value: "redpanda:9092"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for Redpanda to be ready..."
+              export REDPANDA_BROKERS=redpanda:9092
+              until rpk topic list 2>/dev/null; do
+                echo "Redpanda not ready yet, waiting..."
+                sleep 2
+              done
+              echo "Redpanda is ready!"
+      containers:
+        - name: create-topics
+          image: docker.redpanda.com/redpandadata/redpanda:v25.3.6
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Creating Kafka topics..."
+              export REDPANDA_BROKERS=redpanda:9092
+              
+              # Main processing topics
+              rpk topic create howk.pending -p 6 -r 1 || true
+              rpk topic create howk.results -p 6 -r 1 || true
+              rpk topic create howk.deadletter -p 3 -r 1 || true
+              rpk topic create howk.slow -p 6 -r 1 || true
+              
+              # Compact topics for scripts and state
+              rpk topic create howk.scripts -p 3 -r 1 \
+                -c cleanup.policy=compact -c compression.type=snappy || true
+              
+              rpk topic create howk.state -p 6 -r 1 \
+                -c cleanup.policy=compact \
+                -c segment.bytes=104857600 \
+                -c min.cleanable.dirty.ratio=0.01 || true
+              
+              echo "All topics created successfully!"
+              echo ""
+              echo "Topic list:"
+              rpk topic list
+  backoffLimit: 10

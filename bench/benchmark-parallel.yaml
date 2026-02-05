@@ -1,0 +1,92 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: howk-benchmark-parallel-1
+  namespace: howk
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-api
+          image: busybox:1.36
+          command: ['sh', '-c', 'until wget -qO- http://api:8080/health 2>/dev/null; do sleep 2; done']
+      containers:
+        - name: stress
+          image: howk-stress:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -api=http://api:8080
+            - -config=benchmark-1
+            - -endpoint=http://echo-server:8080/webhook
+            - -workers=10
+            - -batch=25
+            - -rate=20
+            - -duration=3m
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "1000m"
+  backoffLimit: 0
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: howk-benchmark-parallel-2
+  namespace: howk
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-api
+          image: busybox:1.36
+          command: ['sh', '-c', 'until wget -qO- http://api:8080/health 2>/dev/null; do sleep 2; done']
+      containers:
+        - name: stress
+          image: howk-stress:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -api=http://api:8080
+            - -config=benchmark-2
+            - -endpoint=http://echo-server:8080/webhook
+            - -workers=10
+            - -batch=25
+            - -rate=20
+            - -duration=3m
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "1000m"
+  backoffLimit: 0
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: howk-benchmark-parallel-3
+  namespace: howk
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-api
+          image: busybox:1.36
+          command: ['sh', '-c', 'until wget -qO- http://api:8080/health 2>/dev/null; do sleep 2; done']
+      containers:
+        - name: stress
+          image: howk-stress:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -api=http://api:8080
+            - -config=benchmark-3
+            - -endpoint=http://echo-server:8080/webhook
+            - -workers=10
+            - -batch=25
+            - -rate=20
+            - -duration=3m
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "1000m"
+  backoffLimit: 0

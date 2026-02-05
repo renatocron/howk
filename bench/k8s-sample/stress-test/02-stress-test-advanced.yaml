@@ -1,0 +1,87 @@
+# Advanced stress test with configurable scenarios
+# Apply this to run extended stress tests
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stress-test-scenarios
+  namespace: howk
+data:
+  # Scenario 1: Sustained load (1000 req/sec for 5 minutes)
+  sustained.sh: |
+    #!/bin/sh
+    echo "Running sustained load test: 1000 req/sec for 5 minutes"
+    stress-test \
+      -api=http://api:8080 \
+      -config=stress-test \
+      -endpoint=http://echo-server:8080/webhook \
+      -workers=50 \
+      -rate=20 \
+      -duration=5m
+  
+  # Scenario 2: Burst test (5000 req/sec for 30 seconds)
+  burst.sh: |
+    #!/bin/sh
+    echo "Running burst test: 5000 req/sec for 30 seconds"
+    stress-test \
+      -api=http://api:8080 \
+      -config=stress-test \
+      -endpoint=http://echo-server:8080/webhook \
+      -workers=100 \
+      -rate=50 \
+      -duration=30s
+  
+  # Scenario 3: Endurance test (100 req/sec for 30 minutes)
+  endurance.sh: |
+    #!/bin/sh
+    echo "Running endurance test: 100 req/sec for 30 minutes"
+    stress-test \
+      -api=http://api:8080 \
+      -config=stress-test \
+      -endpoint=http://echo-server:8080/webhook \
+      -workers=10 \
+      -rate=10 \
+      -duration=30m
+
+---
+# Job for sustained load test
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: stress-test-sustained
+  namespace: howk
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-dependencies
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until wget -q -O - http://api:8080/health 2>/dev/null; do sleep 2; done
+              until wget -q -O - http://echo-server:8080/ 2>/dev/null; do sleep 1; done
+              echo "Dependencies ready!"
+      containers:
+        - name: stress-test
+          image: howk-stress-test:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "/scripts/sustained.sh"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+      volumes:
+        - name: scripts
+          configMap:
+            name: stress-test-scenarios
+            defaultMode: 0755
+  backoffLimit: 0

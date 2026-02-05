@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: howk
+  labels:
+    name: howk
+    app.kubernetes.io/name: howk
+    app.kubernetes.io/component: namespace
