@@ -23,12 +23,16 @@
   - [12. Circuit Opens During High-Priority Delivery](#12-circuit-opens-during-high-priority-delivery)
   - [13. Flapping Circuit (Open/Close Oscillation)](#13-flapping-circuit-openclose-oscillation)
 - [Reconciler Scenarios (Zero Maintenance)](#reconciler-scenarios-zero-maintenance)
-  - [14. Reconciler Started While Workers Running](#14-reconciler-started-while-workers-running)
+  - [14. Reconciler Started While Workers Running (Safe)](#14-reconciler-started-while-workers-running-safe)
   - [15. Reconciler Fails Mid-Replay](#15-reconciler-fails-mid-replay)
   - [16. State Topic Compaction Lag](#16-state-topic-compaction-lag)
+  - [17. Multiple Instances Race to Reconcile](#17-multiple-instances-race-to-reconcile-thundering-herd)
+  - [18. LWW Timestamp Collision](#18-lww-timestamp-collision-theoretical)
 - [Partial Redis Failures](#partial-redis-failures)
-  - [17. Redis Latency Spike / Degraded Performance](#17-redis-latency-spike--degraded-performance)
-  - [18. Redis Memory Pressure](#18-redis-memory-pressure)
+  - [19. Redis Latency Spike / Degraded Performance](#19-redis-latency-spike--degraded-performance)
+  - [20. Redis Memory Pressure](#20-redis-memory-pressure)
+- [Dead Letter Queue (DLQ) Classification](#dead-letter-queue-dlq-classification)
+  - [21. Understanding DLQ Reason Types](#21-understanding-dlq-reason-types)
 - [Dead Letter Queue (DLQ) Classification](#dead-letter-queue-dlq-classification)
   - [19. Understanding DLQ Reason Types](#19-understanding-dlq-reason-types)
 - [Monitoring Checklist](#monitoring-checklist)
@@ -67,28 +71,72 @@
 - Protects both HOWK and the recipient
 - Circuit will reopen when Redis recovers
 
-**Recovery (Zero Maintenance - Stop-the-World):**
-1. **Stop workers** (or ensure minimal activity)
-2. Bring Redis back online (empty or from backup)
-3. Run reconciler to restore state:
-```bash
-   ./bin/howk-reconciler
-```
-4. Reconciler consumes `howk.state` compacted topic:
-   - Always reads from beginning (compacted topic semantics)
-   - Restores status for webhooks pending retry
-   - Rebuilds retry queue from active snapshots
-   - Skips tombstones (terminal states already removed)
-5. **Resume workers**
+**Recovery (Zero Maintenance - Automatic):**
 
-**Design Assumptions:**
-- The reconciler is a **startup/disaster recovery** tool, not continuous healing
-- It assumes exclusive write access to Redis during execution
-- Workers running during reconciliation may cause temporary drift (acceptable)
-- Workers will naturally correct Redis state after reconciliation completes
+**For Multi-Instance Deployments (3 workers + 2 publishers):**
+1. Bring Redis back online (empty)
+2. **Automatic recovery initiates:**
+   - All instances detect missing `howk:system:initialized` canary
+   - Race for `howk:reconciler:lock` (SET NX with TTL)
+   - **Winner:** Runs reconciler, rebuilds Redis, sets canary, releases lock
+   - **Losers:** Wait for canary (poll every 500ms), then resume
+3. **No manual intervention needed**
+
+**Startup Gate Pattern:**
+```go
+// Each worker/scheduler instance does this on startup:
+if !hotstate.CheckCanary() {
+    locked, unlock := hotstate.AcquireReconcilerLock(10 * time.Minute)
+    if locked {
+        // I am the reconciler
+        reconciler.Run(ctx, true)
+        hotstate.SetCanary()
+        unlock()
+    } else {
+        // Wait for peer to finish
+        hotstate.WaitForCanary(5 * time.Minute)
+    }
+}
+// Safe to start processing
+```
+
+**Runtime Sentinel (Optional):**
+```go
+// Background goroutine every 30s
+if !hotstate.CheckCanary() {
+    consumer.Pause()
+    if acquired, unlock := hotstate.AcquireReconcilerLock(10 * time.Minute); acquired {
+        reconciler.Run(ctx, true)
+        hotstate.SetCanary()
+        unlock()
+    }
+    consumer.Resume()
+}
+```
+
+**Last-Write-Wins (LWW) Protection:**
+- All status writes use Lua script with nanosecond timestamp comparison
+- `UpdatedAtNs` in every WebhookStatus and WebhookStateSnapshot
+- Even if reconciler overwrites during active processing, newer data wins
+- Safe for workers to run during reconciliation
+
+**Manual Recovery (Single Instance):**
+```bash
+# For single-instance or forced rebuild
+redis-cli FLUSHDB
+./bin/howk-reconciler
+./bin/howk-worker &
+```
+
+**Design Principles:**
+- **Redis is a cache** — always rebuildable from Kafka
+- **Canary key** — signals "Redis is initialized"
+- **Distributed lock** — ensures only one reconciler runs
+- **LWW timestamps** — prevents race conditions
+- **Compaction** — keeps state topic size proportional to active webhooks
 
 **How it works:**
-- Workers publish state snapshots to `howk.state` on each state change
+- Workers publish state snapshots to `howk.state` on each state change with `UpdatedAtNs`
 - Failed webhooks → full snapshot with retry schedule
 - Terminal webhooks → tombstone (removed by compaction)
 - Kafka compaction ensures only latest state per webhook is retained
@@ -239,7 +287,7 @@
 
 ## Partial Redis Failures
 
-### 17. Redis Latency Spike / Degraded Performance
+### 19. Redis Latency Spike / Degraded Performance
 <details>
 <summary>Details</summary>
 
@@ -272,7 +320,7 @@ redis-cli SLOWLOG GET 10
 
 ---
 
-### 18. Redis Memory Pressure
+### 20. Redis Memory Pressure
 <details>
 <summary>Details</summary>
 
@@ -480,19 +528,28 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 
 ## Reconciler Scenarios (Zero Maintenance)
 
-### 14. Reconciler Started While Workers Running
+### 14. Reconciler Started While Workers Running (Safe)
 <details>
 <summary>Details</summary>
 
 **Behavior:**
-- Safe: Workers publish state snapshots to Kafka (not directly conflicting)
-- Reconciler reads from `howk.state` topic, not live Redis
-- Workers may overwrite Redis state after reconciler finishes (normal operation)
+- **SAFE** with LWW pattern — workers can run during reconciliation
+- Reconciler restores old state from `howk.state` topic
+- Workers continue publishing new state with newer timestamps
+- LWW Lua script ensures newer writes always win
+
+**Sequence Example:**
+```
+T1: Reconciler restores status from snapshot (UpdatedAtNs=1000)
+T2: Worker delivers webhook, updates status (UpdatedAtNs=2000)
+T3: Reconciler tries to restore older snapshot (UpdatedAtNs=1000)
+Result: Lua script rejects T3 (1000 < 2000), T2 data preserved
+```
 
 **Best Practice:**
 - No need to stop workers during reconciliation
 - Reconciler can run anytime Redis needs rebuilding
-- Workers will naturally correct any stale state
+- LWW guarantees correctness even with concurrent writes
 
 </details>
 
@@ -504,14 +561,18 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 
 **Behavior:**
 - Partial state restored from compacted topic
-- Safe to re-run (idempotent operation)
-- Each run flushes Redis and rebuilds from scratch
+- Canary key NOT set (reconciliation incomplete)
+- Other instances may try to acquire lock and restart
 
 **Recovery:**
 ```bash
-# Just re-run - always reads from beginning for compacted topic
+# Manual re-run (or let another instance win the lock)
 ./bin/howk-reconciler
 ```
+
+**Automatic:**
+- Next instance that checks canary will trigger new reconciliation
+- Distributed lock ensures only one runs at a time
 
 **Note:** The `--from-beginning` flag is kept for backward compatibility but is now ignored - compacted topics always read from beginning.
 
@@ -527,14 +588,74 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 - If `howk.state` topic has compaction lag, some old snapshots may remain
 - Reconciler will see multiple snapshots for same webhook
 - Last snapshot wins (normal behavior)
+- LWW timestamps ensure correct ordering even if compaction is behind
 
 **Recovery:**
 - No action needed - Kafka will compact eventually
 - Reconciler handles duplicate states correctly
+- LWW prevents old data from overwriting new
 
 **Monitoring:**
 - Monitor `howk.state` topic size
 - Compaction should keep topic size proportional to active webhooks, not total history
+- Alert if topic grows faster than active webhook count
+
+</details>
+
+---
+
+### 17. Multiple Instances Race to Reconcile (Thundering Herd)
+<details>
+<summary>Details</summary>
+
+**Scenario:** 5 instances (3 workers + 2 publishers) start simultaneously on empty Redis
+
+**Behavior:**
+- All 5 detect missing canary key
+- All 5 try to acquire `howk:reconciler:lock` via `SET NX EX 60`
+- **Only 1 wins** (Redis atomic SETNX guarantees this)
+- Winner runs reconciler, sets canary, releases lock
+- Losers poll canary every 500ms until it appears
+
+**Lock Heartbeat:**
+- Winner extends lock TTL every 20s (1/3 of 60s TTL)
+- Prevents lock expiration during long reconciliation
+- If winner dies, lock expires, another instance can take over
+
+**Example Timeline:**
+```
+T+0s:  Redis comes back empty
+T+1s:  All instances detect missing canary
+T+1s:  Instance-3 wins SETNX lock
+T+1s:  Instances 1,2,4,5 start WaitForCanary() polling
+T+5s:  Instance-3 finishes reconciliation, sets canary
+T+5s:  All instances resume normal operation
+```
+
+**Prevention:**
+- Built-in — SETNX is atomic in Redis
+- No coordination needed outside Redis
+
+</details>
+
+---
+
+### 18. LWW Timestamp Collision (Theoretical)
+<details>
+<summary>Details</summary>
+
+**Scenario:** Two updates with identical `UpdatedAtNs` nanosecond timestamps
+
+**Probability:** ~1 in 2^64 (practically impossible)
+
+**Behavior:**
+- Lua script: `if new_ts > old_ts` — equal timestamps don't overwrite
+- First write wins (data from reconciler or first worker)
+- Next status update will have newer timestamp and win
+
+**Impact:**
+- Negligible — resolves on next status change
+- At-least-once delivery still guaranteed
 
 </details>
 
@@ -542,7 +663,7 @@ HOWK_CIRCUIT_PROBE_INTERVAL=2m
 
 ## Dead Letter Queue (DLQ) Classification
 
-### 19. Understanding DLQ Reason Types
+### 21. Understanding DLQ Reason Types
 <details>
 <summary>Details</summary>
 

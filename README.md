@@ -8,6 +8,8 @@ A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis
 
 - **Kafka is the source of truth** — every webhook and delivery result is a Kafka record
 - **Redis is rebuildable hot state** — if Redis dies, restore from compacted topic (zero maintenance)
+- **Zero maintenance recovery** — distributed lock + canary pattern enables automatic Redis rebuild on multi-instance deployments
+- **Last-Write-Wins (LWW)** — nanosecond timestamps prevent race conditions during concurrent reconciliation
 - **Circuit breakers protect endpoints** — failing endpoints don't burn your retry budget
 - **Penalty box isolates slow endpoints** — excess in-flight traffic is rate-limited to protect the fast lane
 - **At-least-once delivery** — we never lose a webhook, duplicates are the receiver's problem
@@ -67,12 +69,19 @@ A high-throughput, fault-tolerant webhook delivery system built on Kafka + Redis
   │    ZADD retries <next_at_unix> <webhook_id:attempt>              │
   │    SET retry_data:{id} <compressed_webhook>                      │
   │                                                                   │
-  │  Status (per webhook):                                            │
-  │    HSET status:{webhook_id} state=delivered attempt=1 ...        │
+  │  Status (per webhook) - LWW Hash Structure:                       │
+  │    HSET status:{webhook_id}                                       │
+  │      data={json_blob}     ← WebhookStatus JSON                    │
+  │      ts={nanoseconds}     ← UpdatedAtNs for LWW resolution        │
+  │    EXPIRE status:{webhook_id} 7d                                  │
   │                                                                   │
   │  Stats (hourly buckets):                                          │
   │    INCR stats:delivered:2026013015                               │
   │    PFADD stats:hll:endpoints:2026013015 {endpoint}               │
+  │                                                                   │
+  │  System Keys:                                                     │
+  │    howk:system:initialized     ← Canary (Redis initialized?)     │
+  │    howk:reconciler:lock        ← Distributed lock for rebuild    │
   │                                                                   │
   │  ══════════════════════════════════════════════════════════════  │
   │  ALL OF THIS IS REBUILDABLE FROM KAFKA REPLAY                    │
@@ -695,23 +704,89 @@ Response:
 
 ### Redis Dies (Zero Maintenance Recovery)
 
-**Stop-the-World Procedure:**
-1. Stop workers (or ensure minimal activity)
-2. Redis comes back (empty or stale)
-3. Run reconciler: `howk-reconciler`
-4. Reconciler consumes `howk.state` compacted topic:
-   - Always reads from beginning (compacted topic semantics)
-   - Skips tombstones (terminal states)
-   - Restores status and retry schedules from active snapshots
-5. Resume workers - normal operation resumes
+HOWK implements **automatic self-healing** for Redis loss using a distributed coordination pattern:
+
+#### Automatic Recovery (Multi-Instance)
+
+When Redis is lost in a multi-instance deployment (e.g., 3 workers + 2 publishers):
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Worker    │     │   Worker    │     │   Worker    │
+│  Instance 1 │     │  Instance 2 │     │  Instance N │
+└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
+       │                   │                   │
+       └─────────┬─────────┴─────────┬─────────┘
+                 ▼                   ▼
+       ┌───────────────────────────────────────┐
+       │         Distributed Lock              │
+       │   SET howk:reconciler:lock NX EX 60   │
+       │   (Only 1 instance wins)              │
+       └───────────────┬───────────────────────┘
+                       ▼
+       ┌───────────────────────────────────────┐
+       │         Reconciler (Winner)           │
+       │   1. Flush Redis                      │
+       │   2. Consume howk.state → HWM         │
+       │   3. Restore status + retries         │
+       │   4. SET howk:system:initialized      │
+       └───────────────┬───────────────────────┘
+                       ▼
+       ┌───────────────────────────────────────┐
+       │        All Other Instances            │
+       │   WaitForCanary() then resume         │
+       └───────────────────────────────────────┘
+```
+
+**Startup Sequence (Per Instance):**
+1. Check `howk:system:initialized` canary key
+2. If missing: try to acquire `howk:reconciler:lock`
+3. If lock acquired: run reconciler, set canary, release lock
+4. If lock NOT acquired: `WaitForCanary()` until peer finishes
+5. Proceed with normal operation
+
+**Runtime Sentinel (Auto-Recovery):**
+- Background goroutine checks canary every 30s
+- If canary missing (Redis flushed/lost):
+  - Pause Kafka consumer
+  - Try to acquire lock → reconcile → set canary
+  - Resume consumer
+
+#### Last-Write-Wins (LWW) Conflict Resolution
+
+To prevent race conditions during concurrent reconciliation:
+
+```lua
+-- Every SetStatus uses Lua script with nanosecond timestamp check
+local old_ts = tonumber(redis.call('HGET', KEYS[1], 'ts') or '0')
+if new_ts > old_ts then
+    redis.call('HSET', key, 'data', data, 'ts', new_ts)
+    return 1  -- updated
+end
+return 0  -- skipped (old data)
+```
+
+- **Workers** set `UpdatedAtNs = time.Now().UnixNano()` on every status change
+- **Reconciler** restores timestamps from Kafka snapshots
+- **Result:** Even if reconciler replays stale data, it won't overwrite newer writes
+
+#### Manual Recovery (Optional)
+
+For single-instance deployments or forced rebuild:
+
+```bash
+# Stop workers, flush Redis, run reconciler, start workers
+redis-cli FLUSHDB
+./bin/howk-reconciler
+./bin/howk-worker &
+```
 
 **Why this works:**
 - Workers continuously publish state snapshots to `howk.state` topic
-- Failed webhooks (pending retry) → full state snapshot published
+- Failed webhooks (pending retry) → full state snapshot with `UpdatedAtNs`
 - Terminal webhooks (delivered/exhausted) → tombstone published
 - Kafka compaction retains only the latest state per webhook
-
-**Design Note:** The reconciler is a disaster recovery tool, not continuous healing. It assumes exclusive Redis access during execution. Workers running during reconciliation may cause temporary drift, which they'll correct naturally after resuming.
+- LWW ensures safe concurrent writes during recovery
 
 **No data loss:** Redis state is fully reconstructible from Kafka's compacted topic.
 
