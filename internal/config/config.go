@@ -59,12 +59,6 @@ type KafkaConfig struct {
 	GroupSessionTimeout    time.Duration `mapstructure:"group_session_timeout"`
 	GroupHeartbeatInterval time.Duration `mapstructure:"group_heartbeat_interval"`
 	GroupRebalanceTimeout  time.Duration `mapstructure:"group_rebalance_timeout"`
-
-	// ConsumerConcurrency controls how many messages are processed concurrently
-	// within a single partition. Higher values improve throughput for I/O-bound
-	// workloads (HTTP deliveries). Default is 2x CPU cores. Set to 1 for
-	// strict ordering (sequential processing).
-	ConsumerConcurrency int `mapstructure:"consumer_concurrency"`
 }
 
 type TopicsConfig struct {
@@ -179,7 +173,6 @@ func DefaultConfig() *Config {
 			GroupSessionTimeout:    10 * time.Second,
 			GroupHeartbeatInterval: 3 * time.Second,
 			GroupRebalanceTimeout:  10 * time.Second,
-			ConsumerConcurrency:    0, // 0 = auto (2x CPU cores)
 		},
 		Redis: RedisConfig{
 			Addr:         "localhost:6379",
@@ -320,7 +313,6 @@ func bindEnvVariables(v *viper.Viper) error {
 		"kafka.group_session_timeout",
 		"kafka.group_heartbeat_interval",
 		"kafka.group_rebalance_timeout",
-		"kafka.consumer_concurrency",
 		// Redis
 		"redis.addr",
 		"redis.password",

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"sync"
 	"time"
 
@@ -14,13 +13,6 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 )
-
-// DefaultConsumerConcurrency is the default number of concurrent message handlers per partition.
-// This enables high-throughput processing by handling multiple messages concurrently within a partition.
-// Set to 2x CPU cores to allow for I/O-bound workloads (HTTP deliveries).
-func DefaultConsumerConcurrency() int {
-	return runtime.NumCPU() * 2
-}
 
 // KafkaBroker implements Broker using Kafka
 type KafkaBroker struct {
@@ -146,8 +138,7 @@ func (k *KafkaBroker) Subscribe(ctx context.Context, topic, group string, handle
 	defer consumerGroup.Close()
 
 	consumer := &consumerGroupHandler{
-		handler:     handler,
-		concurrency: k.config.ConsumerConcurrency,
+		handler: handler,
 	}
 
 	for {
@@ -182,20 +173,14 @@ func (k *KafkaBroker) Close() error {
 // 2. Sliding window offset tracking: ensures offsets are committed in order (no data loss)
 type consumerGroupHandler struct {
 	handler Handler
-	// concurrency controls how many message keys are processed concurrently per partition.
-	// Each unique key gets its own sequential processing goroutine.
-	// Higher values improve throughput for I/O-bound workloads while maintaining per-key ordering.
-	// Must be > 0. Default is DefaultConsumerConcurrency().
-	concurrency int
 }
 
 // partitionProcessor manages concurrent processing for a single partition
 // with guaranteed per-key ordering and safe offset commits.
 type partitionProcessor struct {
-	handler     Handler
-	concurrency int
-	session     sarama.ConsumerGroupSession
-	claim       sarama.ConsumerGroupClaim
+	handler Handler
+	session sarama.ConsumerGroupSession
+	claim   sarama.ConsumerGroupClaim
 
 	// keyChannels maps message keys to their processing channels
 	// This ensures all messages with the same key are processed sequentially
@@ -267,17 +252,11 @@ func (h *consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error { retu
 func (h *consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
 
 func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	concurrency := h.concurrency
-	if concurrency <= 0 {
-		concurrency = DefaultConsumerConcurrency()
-	}
-
 	ctx, cancel := context.WithCancel(session.Context())
 	defer cancel()
 
 	pp := &partitionProcessor{
 		handler:       h.handler,
-		concurrency:   concurrency,
 		session:       session,
 		claim:         claim,
 		keyChannels:   make(map[string]chan *keyedMessage),
@@ -326,8 +305,7 @@ func (pp *partitionProcessor) run() error {
 			return pp.ctx.Err()
 		}
 
-		// Wait for processing to complete before reading next message for this key
-		<-km.done
+
 	}
 
 	// Signal shutdown
@@ -413,17 +391,10 @@ func (pp *partitionProcessor) keyChannelManager() {
 func (pp *partitionProcessor) offsetCommitter() {
 	defer pp.wg.Done()
 
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			// Periodic commit handled by Sarama's auto-commit
-		case <-pp.ctx.Done():
-			return
-		}
-	}
+	// This goroutine is currently a placeholder for potential future
+	// periodic offset management. Commits are handled by processMessage
+	// when messages complete, using Sarama's MarkOffset.
+	<-pp.ctx.Done()
 }
 
 func (pp *partitionProcessor) processMessage(msg *sarama.ConsumerMessage) bool {

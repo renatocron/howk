@@ -131,7 +131,6 @@ config:
     producerCompression: snappy
     consumerFetchMinBytes: 1
     consumerFetchMaxWait: "500ms"
-    consumerConcurrency: 100   # Concurrent messages per partition (0=auto)
 
   redis:
     poolSize: 100
