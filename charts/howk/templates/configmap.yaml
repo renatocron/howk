@@ -29,6 +29,9 @@ data:
       producer_batch_size: {{ .Values.config.kafka.producerBatchSize }}
       producer_linger_ms: {{ .Values.config.kafka.producerLingerMs }}
       producer_compression: {{ .Values.config.kafka.producerCompression }}
+      consumer_fetch_min_bytes: {{ .Values.config.kafka.consumerFetchMinBytes }}
+      consumer_fetch_max_wait: {{ .Values.config.kafka.consumerFetchMaxWait | quote }}
+      consumer_concurrency: {{ .Values.config.kafka.consumerConcurrency }}
 
     redis:
       addr: {{ .Values.externalServices.redis.addr | quote }}

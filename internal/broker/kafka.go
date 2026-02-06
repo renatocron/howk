@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -13,6 +14,13 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 )
+
+// DefaultConsumerConcurrency is the default number of concurrent message handlers per partition.
+// This enables high-throughput processing by handling multiple messages concurrently within a partition.
+// Set to 2x CPU cores to allow for I/O-bound workloads (HTTP deliveries).
+func DefaultConsumerConcurrency() int {
+	return runtime.NumCPU() * 2
+}
 
 // KafkaBroker implements Broker using Kafka
 type KafkaBroker struct {
@@ -138,7 +146,8 @@ func (k *KafkaBroker) Subscribe(ctx context.Context, topic, group string, handle
 	defer consumerGroup.Close()
 
 	consumer := &consumerGroupHandler{
-		handler: handler,
+		handler:     handler,
+		concurrency: k.config.ConsumerConcurrency,
 	}
 
 	for {
@@ -171,37 +180,70 @@ func (k *KafkaBroker) Close() error {
 // consumerGroupHandler implements sarama.ConsumerGroupHandler
 type consumerGroupHandler struct {
 	handler Handler
+	// concurrency controls how many messages are processed concurrently per partition.
+	// Higher values improve throughput for I/O-bound workloads (e.g., HTTP webhooks).
+	// Must be > 0. Default is DefaultConsumerConcurrency().
+	concurrency int
 }
 
 func (h *consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
 func (h *consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
 
 func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for msg := range claim.Messages() {
-		headers := make(map[string]string)
-		for _, h := range msg.Headers {
-			headers[string(h.Key)] = string(h.Value)
-		}
-
-		brokerMsg := &Message{
-			Key:     msg.Key,
-			Value:   msg.Value,
-			Headers: headers,
-		}
-
-		if err := h.handler(session.Context(), brokerMsg); err != nil {
-			log.Error().Err(err).
-				Str("topic", msg.Topic).
-				Int32("partition", msg.Partition).
-				Int64("offset", msg.Offset).
-				Msg("Handler error")
-			// Don't mark as consumed on error - will be redelivered
-			continue
-		}
-
-		session.MarkMessage(msg, "")
+	// Use default concurrency if not set
+	concurrency := h.concurrency
+	if concurrency <= 0 {
+		concurrency = DefaultConsumerConcurrency()
 	}
+
+	// Create a semaphore to limit concurrent processing
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for msg := range claim.Messages() {
+		// Acquire semaphore (blocks if at concurrency limit)
+		sem <- struct{}{}
+		wg.Add(1)
+
+		// Process message in a goroutine for concurrent handling
+		go func(msg *sarama.ConsumerMessage) {
+			defer wg.Done()
+			defer func() { <-sem }() // Release semaphore when done
+
+			h.processMessage(session, msg)
+		}(msg)
+	}
+
+	// Wait for all in-flight messages to complete before returning
+	wg.Wait()
 	return nil
+}
+
+// processMessage handles a single message and marks it accordingly.
+// This is called concurrently from ConsumeClaim.
+func (h *consumerGroupHandler) processMessage(session sarama.ConsumerGroupSession, msg *sarama.ConsumerMessage) {
+	headers := make(map[string]string)
+	for _, h := range msg.Headers {
+		headers[string(h.Key)] = string(h.Value)
+	}
+
+	brokerMsg := &Message{
+		Key:     msg.Key,
+		Value:   msg.Value,
+		Headers: headers,
+	}
+
+	if err := h.handler(session.Context(), brokerMsg); err != nil {
+		log.Error().Err(err).
+			Str("topic", msg.Topic).
+			Int32("partition", msg.Partition).
+			Int64("offset", msg.Offset).
+			Msg("Handler error")
+		// Don't mark as consumed on error - will be redelivered
+		return
+	}
+
+	session.MarkMessage(msg, "")
 }
 
 // --- Higher-level Webhook Publisher ---
