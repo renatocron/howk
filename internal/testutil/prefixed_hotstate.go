@@ -401,6 +401,47 @@ func (p *PrefixedHotState) DecrInflight(ctx context.Context, endpointHash domain
 	return err
 }
 
+// Canary operations
+
+func (p *PrefixedHotState) CheckCanary(ctx context.Context) (bool, error) {
+	client := p.inner.Client()
+	key := p.prefixKey("system:canary")
+	exists, err := client.Exists(ctx, key).Result()
+	return exists > 0, err
+}
+
+func (p *PrefixedHotState) SetCanary(ctx context.Context) error {
+	client := p.inner.Client()
+	key := p.prefixKey("system:canary")
+	return client.Set(ctx, key, "1", 0).Err()
+}
+
+func (p *PrefixedHotState) DelCanary(ctx context.Context) error {
+	client := p.inner.Client()
+	key := p.prefixKey("system:canary")
+	return client.Del(ctx, key).Err()
+}
+
+func (p *PrefixedHotState) WaitForCanary(ctx context.Context, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			ok, err := p.CheckCanary(ctx)
+			if err == nil && ok {
+				return true
+			}
+		}
+	}
+}
+
 // SystemEpoch operations
 
 func (p *PrefixedHotState) GetEpoch(ctx context.Context) (*domain.SystemEpoch, error) {
@@ -437,6 +478,33 @@ func (p *PrefixedHotState) GetRetryQueueSize(ctx context.Context) (int64, error)
 	client := p.inner.Client()
 	retryQueueKey := p.prefixKey("retries")
 	return client.ZCard(ctx, retryQueueKey).Result()
+}
+
+// AcquireReconcilerLock attempts to acquire a distributed lock for reconciliation.
+// Returns true if lock acquired, and an unlock function to release it.
+func (p *PrefixedHotState) AcquireReconcilerLock(ctx context.Context, ttl time.Duration) (bool, func()) {
+	client := p.inner.Client()
+	lockKey := p.prefixKey("reconciler:lock")
+	instanceID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix())
+
+	// Try to acquire lock using SET NX with TTL
+	ok, err := client.SetNX(ctx, lockKey, instanceID, ttl).Result()
+	if err != nil || !ok {
+		return false, func() {}
+	}
+
+	// Return unlock function that only unlocks if we still own it
+	unlock := func() {
+		script := redis.NewScript(`
+			if redis.call("GET", KEYS[1]) == ARGV[1] then
+				return redis.call("DEL", KEYS[1])
+			end
+			return 0
+		`)
+		script.Run(ctx, client, []string{lockKey}, instanceID)
+	}
+
+	return true, unlock
 }
 
 // prefixedCircuitBreaker wraps the circuit breaker with prefixed keys
