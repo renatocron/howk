@@ -30,8 +30,14 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
+	// Determine config path: flag > env var > empty (uses defaults)
+	cfgPath := *configPath
+	if cfgPath == "" {
+		cfgPath = os.Getenv("HOWK_CONFIG")
+	}
+
 	// Load config
-	cfg, err := config.LoadConfig(*configPath)
+	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load configuration")
 	}

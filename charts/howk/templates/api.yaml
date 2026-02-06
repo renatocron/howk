@@ -37,6 +37,7 @@ spec:
         {{- include "howk.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
+      enableServiceLinks: false  # Disable auto-injection of service env vars that conflict with config
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
