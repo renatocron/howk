@@ -14,19 +14,20 @@ import (
 )
 
 const (
-	statusPrefix       = "status:"
-	retryQueue         = "retries"     // ZSET - stores references like "webhook_id:attempt"
-	retryDataPrefix    = "retry_data:" // String (Compressed JSON) - stores per-reference data
-	retryMetaPrefix    = "retry_meta:" // String (JSON) - stores lightweight metadata
-	processedPrefix    = "processed:"
-	statsPrefix        = "stats:"
-	hllPrefix          = "hll:"
-	circuitStatePrefix = "circuit:"
-	scriptPrefix       = "script:"
-	concurrencyPrefix  = "concurrency:"
-	systemEpochKey     = "howk:system:epoch"
-	canaryKey          = "howk:system:initialized"
-	reconcilerLockKey  = "howk:reconciler:lock"
+	statusPrefix            = "status:"
+	retryQueue              = "retries"     // ZSET - stores references like "webhook_id:attempt"
+	retryDataPrefix         = "retry_data:" // String (Compressed JSON) - stores per-reference data
+	retryMetaPrefix         = "retry_meta:" // String (JSON) - stores lightweight metadata
+	processedPrefix         = "processed:"
+	statsPrefix             = "stats:"
+	hllPrefix               = "hll:"
+	circuitStatePrefix      = "circuit:"
+	scriptPrefix            = "script:"
+	concurrencyPrefix       = "concurrency:"
+	domainConcurrencyPrefix = "domain_concurrency:"
+	systemEpochKey          = "howk:system:epoch"
+	canaryKey               = "howk:system:initialized"
+	reconcilerLockKey       = "howk:reconciler:lock"
 )
 
 // RedisHotState implements HotState using Redis
@@ -675,6 +676,7 @@ func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
 		hllPrefix + "*",
 		circuitStatePrefix + "*",
 		concurrencyPrefix + "*",
+		domainConcurrencyPrefix + "*",
 	}
 
 	for _, pattern := range patterns {

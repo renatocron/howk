@@ -52,6 +52,7 @@ func setupWorkerWithMocks(t *testing.T) (*worker.Worker, *MockPublisher, *MockHo
 		mockDeliveryClient,
 		mockRetryStrategy,
 		testScriptEngine,
+		nil, // domainLimiter not tested here
 	)
 
 	return w, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy

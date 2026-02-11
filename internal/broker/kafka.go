@@ -138,7 +138,8 @@ func (k *KafkaBroker) Subscribe(ctx context.Context, topic, group string, handle
 	defer consumerGroup.Close()
 
 	consumer := &consumerGroupHandler{
-		handler: handler,
+		handler:           handler,
+		perKeyParallelism: k.config.PerKeyParallelism,
 	}
 
 	for {
@@ -172,7 +173,8 @@ func (k *KafkaBroker) Close() error {
 // 1. Key-based concurrency: ensures messages with the same key are processed sequentially
 // 2. Sliding window offset tracking: ensures offsets are committed in order (no data loss)
 type consumerGroupHandler struct {
-	handler Handler
+	handler           Handler
+	perKeyParallelism int
 }
 
 // partitionProcessor manages concurrent processing for a single partition
@@ -194,6 +196,9 @@ type partitionProcessor struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// perKeyParallelism controls how many goroutines process messages for the same key
+	perKeyParallelism int
 }
 
 // keyedMessage wraps a Kafka message with its completion channel
@@ -256,13 +261,14 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 	defer cancel()
 
 	pp := &partitionProcessor{
-		handler:       h.handler,
-		session:       session,
-		claim:         claim,
-		keyChannels:   make(map[string]chan *keyedMessage),
-		offsetTracker: newOffsetTracker(claim.Topic(), claim.Partition(), claim.InitialOffset()),
-		ctx:           ctx,
-		cancel:        cancel,
+		handler:           h.handler,
+		session:           session,
+		claim:             claim,
+		keyChannels:       make(map[string]chan *keyedMessage),
+		offsetTracker:     newOffsetTracker(claim.Topic(), claim.Partition(), claim.InitialOffset()),
+		ctx:               ctx,
+		cancel:            cancel,
+		perKeyParallelism: h.perKeyParallelism,
 	}
 
 	return pp.run()
@@ -350,9 +356,15 @@ func (pp *partitionProcessor) getOrCreateKeyChannel(key string) chan *keyedMessa
 	ch = make(chan *keyedMessage, 100) // Buffer up to 100 messages per key
 	pp.keyChannels[key] = ch
 
-	// Start worker goroutine for this key
-	pp.wg.Add(1)
-	go pp.keyWorker(key, ch)
+	// Start N worker goroutines for this key (perKeyParallelism)
+	n := pp.perKeyParallelism
+	if n < 1 {
+		n = 1
+	}
+	for i := 0; i < n; i++ {
+		pp.wg.Add(1)
+		go pp.keyWorker(key, ch)
+	}
 
 	return ch
 }

@@ -375,6 +375,7 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 		mockDeliveryClient, // Passed as delivery.Deliverer interface
 		mockRetryStrategy,  // Passed as retry.Retrier interface
 		testScriptEngine,   // Passed as *script.Engine
+		nil,                // domainLimiter not tested here
 	)
 
 	return w, mockBroker, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy
@@ -405,6 +406,7 @@ func TestNewWorker(t *testing.T) {
 		mockDeliveryClient,
 		mockRetryStrategy,
 		testScriptEngine,
+		nil, // domainLimiter not tested here
 	)
 
 	assert.NotNil(t, w)

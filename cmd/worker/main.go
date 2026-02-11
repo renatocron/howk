@@ -71,6 +71,27 @@ func main() {
 	dc := delivery.NewClient(cfg.Delivery)
 	defer dc.Close()
 
+	// Initialize domain limiter (if enabled)
+	var domainLimiter delivery.DomainLimiter
+	if cfg.Concurrency.MaxInflightPerDomain > 0 {
+		domainLimiter = delivery.NewRedisDomainLimiter(hs.Client(), cfg.Concurrency)
+		log.Info().
+			Int("max_inflight_per_domain", cfg.Concurrency.MaxInflightPerDomain).
+			Interface("domain_overrides", cfg.Concurrency.DomainOverrides).
+			Msg("Domain concurrency limiter enabled")
+
+		// Warn if HTTP transport would bottleneck
+		if cfg.Concurrency.MaxInflightPerDomain > cfg.Delivery.MaxConnsPerHost {
+			log.Warn().
+				Int("max_inflight_per_domain", cfg.Concurrency.MaxInflightPerDomain).
+				Int("max_conns_per_host", cfg.Delivery.MaxConnsPerHost).
+				Msg("MaxInflightPerDomain exceeds MaxConnsPerHost - HTTP transport may bottleneck")
+		}
+	} else {
+		domainLimiter = delivery.NewNoopDomainLimiter()
+		log.Debug().Msg("Domain concurrency limiter disabled (MaxInflightPerDomain = 0)")
+	}
+
 	// Initialize retry strategy
 	rs := retry.NewStrategy(cfg.Retry)
 
@@ -108,7 +129,7 @@ func main() {
 	defer scriptEngine.Close()
 
 	// Create worker
-	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, dc, rs, scriptEngine)
+	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, dc, rs, scriptEngine, domainLimiter)
 
 	// Initialize and start script consumer if Lua is enabled
 	// This ensures the worker has scripts even if Redis is flushed

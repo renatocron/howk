@@ -25,6 +25,7 @@ type Worker struct {
 	hotstate       hotstate.HotState
 	circuit        hotstate.CircuitBreakerChecker
 	delivery       delivery.Deliverer
+	domainLimiter  delivery.DomainLimiter
 	retry          retry.Retrier
 	scriptEngine   *script.Engine
 	scriptConsumer *script.ScriptConsumer
@@ -39,16 +40,18 @@ func NewWorker(
 	dc delivery.Deliverer,
 	rs retry.Retrier,
 	se *script.Engine,
+	dl delivery.DomainLimiter,
 ) *Worker {
 	return &Worker{
-		config:       cfg,
-		broker:       brk,
-		publisher:    pub,
-		hotstate:     hs,
-		circuit:      hs.CircuitBreaker(),
-		delivery:     dc,
-		retry:        rs,
-		scriptEngine: se,
+		config:        cfg,
+		broker:        brk,
+		publisher:     pub,
+		hotstate:      hs,
+		circuit:       hs.CircuitBreaker(),
+		delivery:      dc,
+		domainLimiter: dl,
+		retry:         rs,
+		scriptEngine:  se,
 	}
 }
 
@@ -119,6 +122,48 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 	if isProbe {
 		logger.Debug().Msg("Probe request (circuit half-open)")
 	}
+
+	// Check domain-level concurrency (NEW)
+	domainAcquired := false
+	if w.domainLimiter != nil {
+		acquired, err := w.domainLimiter.TryAcquire(ctx, webhook.Endpoint)
+		if err != nil {
+			logger.Warn().Err(err).Msg("Domain limiter check failed, proceeding")
+			// On error, proceed (fail-open)
+		} else if !acquired {
+			// Domain at capacity
+			if isSlowLane {
+				// Already in slow lane and still over threshold - NACK for retry
+				logger.Info().
+					Str("endpoint", webhook.Endpoint).
+					Msg("Domain concurrency limit reached even in slow lane, NACKing for retry")
+				return fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint)
+			}
+
+			logger.Info().
+				Str("endpoint", webhook.Endpoint).
+				Msg("Domain concurrency limit reached, diverting to slow lane")
+
+			if err := w.publisher.PublishToSlow(ctx, &webhook); err != nil {
+				logger.Error().Err(err).Msg("Failed to divert to slow lane, proceeding with delivery")
+				// Fail-open: proceed with delivery
+			} else {
+				w.recordStats(ctx, "diverted", &webhook)
+				return nil // Successfully diverted
+			}
+		} else {
+			domainAcquired = true
+		}
+	}
+
+	// Ensure domain release is called on all exit paths after we acquire
+	defer func() {
+		if domainAcquired && w.domainLimiter != nil {
+			if err := w.domainLimiter.Release(ctx, webhook.Endpoint); err != nil {
+				logger.Warn().Err(err).Msg("Failed to release domain concurrency slot")
+			}
+		}
+	}()
 
 	// Check in-flight concurrency (penalty box gate)
 	inflightAcquired := false

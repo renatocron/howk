@@ -31,6 +31,7 @@ data:
       producer_compression: {{ .Values.config.kafka.producerCompression }}
       consumer_fetch_min_bytes: {{ .Values.config.kafka.consumerFetchMinBytes }}
       consumer_fetch_max_wait: {{ .Values.config.kafka.consumerFetchMaxWait | quote }}
+      per_key_parallelism: {{ .Values.config.kafka.perKeyParallelism }}
 
     redis:
       addr: {{ .Values.externalServices.redis.addr | quote }}
@@ -69,6 +70,13 @@ data:
       max_inflight_per_endpoint: {{ .Values.config.concurrency.maxInflightPerEndpoint }}
       inflight_ttl: {{ .Values.config.concurrency.inflightTTL | quote }}
       slow_lane_rate: {{ .Values.config.concurrency.slowLaneRate }}
+      max_inflight_per_domain: {{ .Values.config.concurrency.maxInflightPerDomain }}
+      domain_overrides:
+        {{- range $domain, $limit := .Values.config.concurrency.domainOverrides }}
+        {{ $domain }}: {{ $limit }}
+        {{- else }}
+        {}
+        {{- end }}
 
     ttl:
       circuit_state_ttl: {{ .Values.config.ttl.circuitStateTTL | quote }}

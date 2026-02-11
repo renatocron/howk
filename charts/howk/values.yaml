@@ -131,6 +131,10 @@ config:
     producerCompression: snappy
     consumerFetchMinBytes: 1
     consumerFetchMaxWait: "500ms"
+    # PerKeyParallelism controls how many goroutines process messages for the same
+    # partition key (ConfigID) concurrently. Default: 1 (sequential).
+    # Higher values trade per-key ordering for throughput.
+    perKeyParallelism: 1
 
   redis:
     poolSize: 100
@@ -165,7 +169,13 @@ config:
   concurrency:
     maxInflightPerEndpoint: 50
     inflightTTL: "60s"
-    slowLaneRate: 10
+    slowLaneRate: 20
+    # MaxInflightPerDomain is the default max concurrent requests to any single domain.
+    # 0 = disabled (no domain-level limiting). Aggregates across all endpoint URLs on same host.
+    maxInflightPerDomain: 0
+    # DomainOverrides maps specific domains to custom concurrency limits.
+    # Example: {"api.stripe.com": 200, "hooks.slack.com": 30}
+    domainOverrides: {}
 
   ttl:
     circuitStateTTL: "24h"

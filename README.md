@@ -429,7 +429,7 @@ Prevents slow/timing-out endpoints from starving the fast delivery path by routi
 Fast Lane (howk.pending)          Slow Lane (howk.slow)
 ┌─────────────────────┐          ┌─────────────────────┐
 │ Consume webhook     │          │ Rate-limited consume│
-│ INCR concurrency    │          │ (5/sec per worker)  │
+│ INCR concurrency    │          │ (20/sec per worker) │
 │ Check threshold     │          │                     │
 │ (< 50 by default)   │          │ Re-check concurrency│
 │                     │          │ If recovered → fast │
@@ -463,7 +463,7 @@ Fast Lane (howk.pending)          Slow Lane (howk.slow)
 |---------|---------|-------------|
 | `concurrency.max_inflight_per_endpoint` | 50 | Threshold above which webhooks are diverted |
 | `concurrency.inflight_ttl` | 2m | TTL for concurrency counter (crash recovery) |
-| `concurrency.slow_lane_rate` | 5 | Max deliveries/sec from slow lane per worker |
+| `concurrency.slow_lane_rate` | 20 | Max deliveries/sec from slow lane per worker |
 | `kafka.topics.slow` | howk.slow | Slow lane Kafka topic name |
 | `ttl.retry_data_ttl` | 7d | TTL for compressed retry data in Redis |
 | `ttl.status_ttl` | 7d | TTL for webhook status records |
@@ -475,7 +475,7 @@ Environment variables:
 ```bash
 export HOWK_CONCURRENCY_MAX_INFLIGHT_PER_ENDPOINT=50
 export HOWK_CONCURRENCY_INFLIGHT_TTL=2m
-export HOWK_CONCURRENCY_SLOW_LANE_RATE=5
+export HOWK_CONCURRENCY_SLOW_LANE_RATE=20
 export HOWK_KAFKA_TOPICS_SLOW=howk.slow
 export HOWK_TTL_RETRY_DATA_TTL=168h
 export HOWK_TTL_STATUS_TTL=168h
@@ -483,6 +483,82 @@ export HOWK_TTL_CIRCUIT_STATE_TTL=24h
 export HOWK_TTL_STATS_TTL=48h
 export HOWK_TTL_IDEMPOTENCY_TTL=24h
 ```
+
+## Domain Concurrency Limiter (NEW)
+
+Aggregates in-flight requests by domain hostname to prevent overwhelming a single destination, regardless of how many different endpoint URLs point to it.
+
+### Problem It Solves
+
+Without domain limiting:
+- `api.stripe.com/hook1` and `api.stripe.com/hook2` have independent inflight budgets
+- Could accidentally send 50 + 50 = 100 concurrent requests to `api.stripe.com`
+- Stripe (or any destination) may rate-limit or block the traffic
+
+With domain limiting:
+- Both endpoints share a per-domain budget (e.g., 100 for `api.stripe.com`)
+- Total concurrent requests to stripe.com are capped
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Domain Limiter (Redis-backed)                              │
+│                                                             │
+│  INCR domain_concurrency:api.stripe.com  ──┐               │
+│  (check against max, default: disabled)    │               │
+│                                            ▼               │
+│  If under limit ──────────────────────────►  Proceed        │
+│  If over limit ───────────────────────────►  Divert to slow │
+│                                            │               │
+│  DECR domain_concurrency:api.stripe.com  ◄──┘  (on complete)│
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Integration point:** Domain check runs **after** circuit breaker check, **before** endpoint inflight check.
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `concurrency.max_inflight_per_domain` | 0 | Max concurrent requests per domain (0 = disabled) |
+| `concurrency.domain_overrides` | {} | Per-domain limits: `{"api.stripe.com": 200}` |
+
+**Environment variables:**
+```bash
+export HOWK_CONCURRENCY_MAX_INFLIGHT_PER_DOMAIN=100
+export HOWK_CONCURRENCY_DOMAIN_OVERRIDES='{"api.stripe.com":200,"hooks.slack.com":30}'
+```
+
+**Safety features:**
+- **Fail-open**: On Redis error, allows the request (logs warning)
+- **TTL**: Uses same TTL as endpoint inflight counters (2min default)
+- **Lua DECR**: Never goes below zero (prevents counter drift)
+
+## Per-Key Parallelism (NEW)
+
+Controls how many goroutines process messages for the same partition key (ConfigID) concurrently. 
+
+### Trade-off
+
+| Value | Behavior | Use Case |
+|-------|----------|----------|
+| 1 (default) | Sequential per ConfigID | Need strict ordering per tenant |
+| N > 1 | Parallel per ConfigID | Maximize throughput, idempotent webhooks |
+
+### Configuration
+
+```yaml
+kafka:
+  per_key_parallelism: 1  # Default: sequential
+```
+
+**Environment variable:**
+```bash
+export HOWK_KAFKA_PER_KEY_PARALLELISM=4
+```
+
+**Important:** With N > 1, messages from the same ConfigID may be delivered concurrently/out of order. This is safe if webhooks are idempotent (each has unique ID, receivers should handle duplicates).
 
 ## Retry Strategy
 
@@ -578,6 +654,7 @@ kafka:
     deadletter: howk.deadletter
   consumer_group: howk-workers
   retention: 168h
+  # per_key_parallelism: 1  # Uncomment for per-key parallelism (default: 1 = sequential)
 
 redis:
   addr: "localhost:6379"
@@ -605,7 +682,11 @@ circuit_breaker:
 concurrency:
   max_inflight_per_endpoint: 50
   inflight_ttl: 2m
-  slow_lane_rate: 5
+  slow_lane_rate: 20
+  # max_inflight_per_domain: 0  # Uncomment to enable domain limiting (0 = disabled)
+  # domain_overrides:           # Optional per-domain limits
+  #   api.stripe.com: 200
+  #   hooks.slack.com: 30
 
 scheduler:
   poll_interval: 1s

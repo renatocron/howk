@@ -59,6 +59,11 @@ type KafkaConfig struct {
 	GroupSessionTimeout    time.Duration `mapstructure:"group_session_timeout"`
 	GroupHeartbeatInterval time.Duration `mapstructure:"group_heartbeat_interval"`
 	GroupRebalanceTimeout  time.Duration `mapstructure:"group_rebalance_timeout"`
+
+	// PerKeyParallelism controls how many goroutines process messages for the same
+	// partition key (ConfigID) concurrently. Default: 1 (sequential, current behavior).
+	// Higher values trade per-key ordering for throughput.
+	PerKeyParallelism int `mapstructure:"per_key_parallelism"`
 }
 
 type TopicsConfig struct {
@@ -124,8 +129,16 @@ type ConcurrencyConfig struct {
 	InflightTTL time.Duration `mapstructure:"inflight_ttl"`
 
 	// SlowLaneRate is the maximum number of deliveries per second
-	// from the slow lane per worker instance. Default: 5.
+	// from the slow lane per worker instance. Default: 20.
 	SlowLaneRate int `mapstructure:"slow_lane_rate"`
+
+	// MaxInflightPerDomain is the default max concurrent requests to any single domain.
+	// 0 = disabled (no domain-level limiting). Aggregates across all endpoint URLs on same host.
+	MaxInflightPerDomain int `mapstructure:"max_inflight_per_domain"`
+
+	// DomainOverrides maps specific domains to custom concurrency limits.
+	// Example: {"api.stripe.com": 200, "hooks.slack.com": 30}
+	DomainOverrides map[string]int `mapstructure:"domain_overrides"`
 }
 
 type LuaConfig struct {
@@ -229,7 +242,9 @@ func DefaultConfig() *Config {
 		Concurrency: ConcurrencyConfig{
 			MaxInflightPerEndpoint: 50,
 			InflightTTL:            2 * time.Minute,
-			SlowLaneRate:           5,
+			SlowLaneRate:           20,
+			MaxInflightPerDomain:   0,
+			DomainOverrides:        map[string]int{},
 		},
 	}
 }
@@ -364,9 +379,12 @@ func bindEnvVariables(v *viper.Viper) error {
 		// Concurrency / Slow Lane
 		"kafka.topics.slow",
 		"kafka.topics.state",
+		"kafka.per_key_parallelism",
 		"concurrency.max_inflight_per_endpoint",
 		"concurrency.inflight_ttl",
 		"concurrency.slow_lane_rate",
+		"concurrency.max_inflight_per_domain",
+		"concurrency.domain_overrides",
 	}
 
 	for _, key := range keys {
