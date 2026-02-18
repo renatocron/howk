@@ -89,3 +89,18 @@ data:
       enabled: {{ .Values.config.lua.enabled }}
       timeout: {{ .Values.config.lua.timeout | quote }}
       memory_limit_mb: {{ .Values.config.lua.memoryLimitMb }}
+
+    transformer:
+      enabled: {{ .Values.config.transformer.enabled }}
+      script_dirs:
+{{- range .Values.config.transformer.scriptDirs }}
+        - {{ . | quote }}
+{{- end }}
+      passwd_dirs:
+{{- range .Values.config.transformer.passwdDirs }}
+        - {{ . | quote }}
+{{- else }}
+        []
+{{- end }}
+      timeout: {{ .Values.config.transformer.timeout | quote }}
+      memory_limit_mb: {{ .Values.config.transformer.memoryLimitMb }}

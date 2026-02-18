@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 
@@ -44,7 +43,7 @@ func (s *Server) handleIncoming(c *gin.Context) {
 		}
 	}
 
-	// 3. Read body
+	// 3. Read body (raw bytes - any content type)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
@@ -52,9 +51,10 @@ func (s *Server) handleIncoming(c *gin.Context) {
 	}
 	defer c.Request.Body.Close()
 
-	// 4. Validate JSON body
-	if !json.Valid(body) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
+	// 4. Check for body size limit (use API max request size)
+	maxSize := s.config.MaxRequestSize
+	if maxSize > 0 && int64(len(body)) > maxSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
 		return
 	}
 

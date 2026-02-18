@@ -781,6 +781,42 @@ Response:
 }
 ```
 
+### Incoming Webhook Transformer
+
+```
+POST /incoming/:script_name
+```
+
+Execute a Lua transformer script to fan out incoming webhooks. See [docs/transformers.md](docs/transformers.md) for full documentation.
+
+Request:
+```bash
+curl -X POST http://localhost:8080/incoming/stripe-router \
+  -H "Content-Type: application/json" \
+  -u admin:password \
+  -d '{"type": "charge.succeeded", "amount": 1000}'
+```
+
+Response: `200 OK`
+```json
+{
+  "webhooks": [
+    {"id": "wh_01HQXYZ...", "endpoint": "https://billing.internal/webhook"},
+    {"id": "wh_01HQABC...", "endpoint": "https://analytics.internal/track"}
+  ],
+  "count": 2
+}
+```
+
+**Features:**
+- Lua scripting for payload transformation and routing
+- Fan-out: 1 incoming request → N outgoing webhooks
+- Basic Auth support (bcrypt or plaintext)
+- Domain allowlists for security
+- Hot-reload via SIGHUP
+- KV store access for deduplication/state
+- HTTP client for external API calls
+
 ## Recovery
 
 ### Redis Dies (Zero Maintenance Recovery)

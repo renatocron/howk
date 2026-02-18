@@ -25,6 +25,12 @@ metadata:
   labels:
     {{- include "howk.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
+{{- if and .Values.config.transformer.enabled .Values.configmapReload.enabled (eq .Values.configmapReload.method "annotation") }}
+  annotations:
+    # These annotations force redeployment when transformer configs change
+    # This provides "auto-reload" via pod restart
+    checksum/transformer-scripts: {{ include (print $.Template.BasePath "/transformer-configmap.yaml") . | sha256sum }}
+{{- end }}
 spec:
   replicas: {{ .Values.api.replicaCount }}
   selector:
@@ -36,8 +42,18 @@ spec:
       labels:
         {{- include "howk.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: api
+      annotations:
+        # Force redeployment when main config changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.config.transformer.enabled }}
+        checksum/transformer-configs: {{ include (print $.Template.BasePath "/transformer-configmap.yaml") . | sha256sum }}
+        {{- end }}
     spec:
       enableServiceLinks: false  # Disable auto-injection of service env vars that conflict with config
+      {{- if and .Values.config.transformer.enabled .Values.configmapReload.enabled (eq .Values.configmapReload.method "signal") }}
+      # Share process namespace so sidecar can send SIGHUP to api container
+      shareProcessNamespace: true
+      {{- end }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -56,6 +72,11 @@ spec:
             - name: config
               mountPath: /config
               readOnly: true
+            {{- if .Values.config.transformer.enabled }}
+            - name: transformer-scripts
+              mountPath: /etc/howk/transformers
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
           livenessProbe:
@@ -70,10 +91,72 @@ spec:
               port: http
             initialDelaySeconds: {{ .Values.api.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.api.readinessProbe.periodSeconds }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+          {{- if and .Values.config.transformer.enabled .Values.configmapReload.enabled (eq .Values.configmapReload.method "signal") }}
+          # Ensure the API runs as PID 1 so sidecar can signal it
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          {{- end }}
+        {{- if and .Values.config.transformer.enabled .Values.configmapReload.enabled (eq .Values.configmapReload.method "signal") }}
+        # Sidecar that watches ConfigMaps and sends SIGHUP for hot-reload
+        - name: configmap-reload
+          image: "{{ .Values.configmapReload.image.repository }}:{{ .Values.configmapReload.image.tag }}"
+          imagePullPolicy: {{ .Values.configmapReload.image.pullPolicy }}
+          env:
+            # Watch for changes to transformer ConfigMaps
+            - name: LABEL
+              value: "app.kubernetes.io/name={{ include "howk.name" . }},app.kubernetes.io/component=transformer"
+            - name: LABEL_VALUE
+              value: ""
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: METHOD
+              value: "SIGNAL"
+            - name: SIGNAL
+              value: "{{ .Values.configmapReload.signal }}"
+            - name: PID
+              value: "1"  # API container runs as PID 1 in shared namespace
+            - name: SLEEP_TIME
+              value: "{{ .Values.configmapReload.sleepTime }}"
+          resources:
+            {{- toYaml .Values.configmapReload.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+        {{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ include "howk.fullname" . }}-config
+        {{- if .Values.config.transformer.enabled }}
+        - name: transformer-scripts
+          projected:
+            sources:
+              - configMap:
+                  name: {{ include "howk.fullname" . }}-transformer-scripts
+              - configMap:
+                  name: {{ include "howk.fullname" . }}-transformer-configs
+              {{- if .Values.transformerAuth }}
+              - configMap:
+                  name: {{ include "howk.fullname" . }}-transformer-auth
+              {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

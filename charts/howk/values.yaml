@@ -186,6 +186,61 @@ config:
 
   lua:
     enabled: false
+    timeout: "500ms"
+    memoryLimitMb: 50
+
+  # Transformer (incoming webhook fan-out)
+  transformer:
+    enabled: false
+    scriptDirs:
+      - "/etc/howk/transformers"
+    passwdDirs: []  # Empty = use scriptDirs
+    timeout: "500ms"
+    memoryLimitMb: 50
+
+# Transformer scripts (ConfigMap-based)
+# Each key becomes a .lua file, value is the script content
+transformerScripts:
+  # example-echo: |
+  #   local data = json.decode(incoming)
+  #   howk.post("https://httpbin.org/post", data)
+
+# Transformer JSON configs (optional, per script)
+# Each key becomes a .json file
+transformerConfigs: {}
+  # example-echo: |
+  #   {"allowed_domains": ["httpbin.org"]}
+
+# Transformer authentication (optional, per script)
+# Each key becomes a .passwd file
+transformerAuth: {}
+  # example-echo: |
+  #   admin:$2b$12$xxxxxxxx...
+
+# ConfigMap reload configuration
+# When enabled, a sidecar watches for ConfigMap changes and sends SIGHUP to reload scripts
+# without pod restart. Requires shareProcessNamespace: true
+configmapReload:
+  enabled: false
+  image:
+    repository: ghcr.io/kiwigrid/k8s-sidecar
+    tag: 1.25.2
+    pullPolicy: IfNotPresent
+  resources:
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+  # Reload behavior
+  # Method 1: "signal" - Send SIGHUP to main process (requires shareProcessNamespace)
+  # Method 2: "annotation" - Trigger rolling restart via annotation change
+  method: annotation
+  # For method: signal - the signal to send (1 = SIGHUP)
+  signal: 1
+  # Polling interval for watching ConfigMaps (seconds)
+  sleepTime: 15
 
 # Optional: Image pull secrets for private registries
 global:

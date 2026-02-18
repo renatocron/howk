@@ -1,0 +1,70 @@
+{{- if .Values.config.transformer.enabled }}
+---
+# Transformer Scripts ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "howk.fullname" . }}-transformer-scripts
+  labels:
+    {{- include "howk.labels" . | nindent 4 }}
+    app.kubernetes.io/component: transformer
+{{- if .Values.configmapReload.enabled }}
+  annotations:
+    # Marker for configmap-reload sidecar
+    k8s-sidecar.watch: "true"
+{{- end }}
+data:
+{{- range $name, $content := .Values.transformerScripts }}
+  {{ $name }}.lua: |
+{{ $content | indent 4 }}
+{{- else }}
+  # No transformer scripts configured
+  # Add scripts to .Values.transformerScripts in values.yaml
+  _empty.lua: |
+    -- Placeholder script - replace with actual transformer scripts
+    log.info("No transformer scripts configured")
+{{- end }}
+
+---
+# Transformer JSON Configs ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "howk.fullname" . }}-transformer-configs
+  labels:
+    {{- include "howk.labels" . | nindent 4 }}
+    app.kubernetes.io/component: transformer
+{{- if .Values.configmapReload.enabled }}
+  annotations:
+    k8s-sidecar.watch: "true"
+{{- end }}
+data:
+{{- range $name, $content := .Values.transformerConfigs }}
+  {{ $name }}.json: |
+{{ $content | indent 4 }}
+{{- else }}
+  # No transformer configs
+  _empty.json: "{}"
+{{- end }}
+
+---
+# Transformer Auth ConfigMap (for .passwd files)
+{{- if .Values.transformerAuth }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "howk.fullname" . }}-transformer-auth
+  labels:
+    {{- include "howk.labels" . | nindent 4 }}
+    app.kubernetes.io/component: transformer
+{{- if .Values.configmapReload.enabled }}
+  annotations:
+    k8s-sidecar.watch: "true"
+{{- end }}
+data:
+{{- range $name, $content := .Values.transformerAuth }}
+  {{ $name }}.passwd: |
+{{ $content | indent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
