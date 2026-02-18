@@ -17,18 +17,24 @@ import (
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/script"
+	"github.com/howk/howk/internal/transformer"
 )
 
 // Server is the HTTP API server
 type Server struct {
-	config          config.APIConfig
-	publisher       broker.WebhookPublisher
-	hotstate        hotstate.HotState
-	scriptValidator script.ValidatorInterface
-	scriptPublisher script.PublisherInterface
-	router          *gin.Engine
-	logger          zerolog.Logger
+	config              config.APIConfig
+	publisher           broker.WebhookPublisher
+	hotstate            hotstate.HotState
+	scriptValidator     script.ValidatorInterface
+	scriptPublisher     script.PublisherInterface
+	transformerRegistry *transformer.Registry
+	transformerEngine   *transformer.Engine
+	router              *gin.Engine
+	logger              zerolog.Logger
 }
+
+// ServerOption is a functional option for Server
+type ServerOption func(*Server)
 
 // NewServer creates a new API server
 func NewServer(
@@ -37,6 +43,7 @@ func NewServer(
 	hs hotstate.HotState,
 	scriptValidator script.ValidatorInterface,
 	scriptPublisher script.PublisherInterface,
+	opts ...ServerOption,
 ) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
@@ -53,8 +60,21 @@ func NewServer(
 		logger:          log.With().Str("component", "api").Logger(),
 	}
 
+	// Apply functional options
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	s.setupRoutes()
 	return s
+}
+
+// WithTransformers sets the transformer registry and engine
+func WithTransformers(reg *transformer.Registry, eng *transformer.Engine) ServerOption {
+	return func(s *Server) {
+		s.transformerRegistry = reg
+		s.transformerEngine = eng
+	}
 }
 
 func (s *Server) setupRoutes() {
@@ -82,6 +102,11 @@ func (s *Server) setupRoutes() {
 
 	// Stats endpoint
 	s.router.GET("/stats", s.getStats)
+
+	// Transformer endpoint (only if transformer feature is enabled)
+	if s.transformerRegistry != nil {
+		s.router.POST("/incoming/:script_name", s.handleIncoming)
+	}
 }
 
 // Run starts the server

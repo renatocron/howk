@@ -31,6 +31,7 @@ type Config struct {
 	TTL            TTLConfig            `mapstructure:"ttl"`
 	Lua            LuaConfig            `mapstructure:"lua"`
 	Concurrency    ConcurrencyConfig    `mapstructure:"concurrency"`
+	Transformer    TransformerConfig    `mapstructure:"transformer"`
 }
 
 type APIConfig struct {
@@ -157,6 +158,15 @@ type LuaConfig struct {
 	HTTPCacheTTL     time.Duration `mapstructure:"http_cache_ttl"`
 }
 
+// TransformerConfig configures the API-side Lua transformer feature for incoming webhook fan-out
+type TransformerConfig struct {
+	Enabled       bool          `mapstructure:"enabled"`         // default: false
+	ScriptDirs    []string      `mapstructure:"script_dirs"`     // e.g. ["/etc/howk/transformers/"]
+	PasswdDirs    []string      `mapstructure:"passwd_dirs"`     // optional; if empty, uses ScriptDirs
+	Timeout       time.Duration `mapstructure:"timeout"`         // default: 500ms
+	MemoryLimitMB int           `mapstructure:"memory_limit_mb"` // default: 50
+}
+
 // DefaultConfig returns sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
@@ -245,6 +255,13 @@ func DefaultConfig() *Config {
 			SlowLaneRate:           20,
 			MaxInflightPerDomain:   0,
 			DomainOverrides:        map[string]int{},
+		},
+		Transformer: TransformerConfig{
+			Enabled:       false, // Feature flag - must be explicitly enabled
+			ScriptDirs:    []string{},
+			PasswdDirs:    []string{}, // Empty means use ScriptDirs
+			Timeout:       500 * time.Millisecond,
+			MemoryLimitMB: 50,
 		},
 	}
 }
@@ -385,6 +402,12 @@ func bindEnvVariables(v *viper.Viper) error {
 		"concurrency.slow_lane_rate",
 		"concurrency.max_inflight_per_domain",
 		"concurrency.domain_overrides",
+		// Transformer
+		"transformer.enabled",
+		"transformer.script_dirs",
+		"transformer.passwd_dirs",
+		"transformer.timeout",
+		"transformer.memory_limit_mb",
 	}
 
 	for _, key := range keys {
