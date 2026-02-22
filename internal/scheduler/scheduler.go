@@ -13,6 +13,7 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/metrics"
 )
 
 // Scheduler pops due retries from Redis and re-enqueues them to Kafka
@@ -58,6 +59,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			log.Info().Msg("Scheduler stopping...")
 			return ctx.Err()
 		case <-ticker.C:
+			if size, err := s.hotstate.GetRetryQueueSize(ctx); err == nil {
+				metrics.RetryQueueDepth.Set(float64(size))
+			}
 			if err := s.processBatch(ctx); err != nil {
 				log.Error().Err(err).Msg("Scheduler batch processing failed")
 			}

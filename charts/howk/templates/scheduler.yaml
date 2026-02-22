@@ -17,6 +17,12 @@ spec:
       labels:
         {{- include "howk.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: scheduler
+      {{- if .Values.config.metrics.enabled }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.config.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+      {{- end }}
     spec:
       enableServiceLinks: false  # Disable auto-injection of service env vars that conflict with config
       {{- with .Values.global.imagePullSecrets }}
@@ -27,6 +33,11 @@ spec:
         - name: scheduler
           image: "{{ .Values.images.scheduler.repository }}:{{ .Values.images.scheduler.tag }}"
           imagePullPolicy: {{ .Values.images.scheduler.pullPolicy }}
+          {{- if .Values.config.metrics.enabled }}
+          ports:
+            - containerPort: {{ .Values.config.metrics.port }}
+              name: metrics
+          {{- end }}
           env:
             - name: HOWK_CONFIG
               value: /config/config.yaml

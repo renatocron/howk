@@ -19,7 +19,8 @@
       "Bash(go get:*)",
       "Bash(pkill:*)",
       "Bash(curl:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(helm lint:*)"
     ]
   },
   "enabledPlugins": {

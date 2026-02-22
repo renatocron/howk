@@ -15,6 +15,7 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/metrics"
 	"github.com/howk/howk/internal/retry"
 	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/script/modules"
@@ -127,6 +128,11 @@ func main() {
 	scriptLoader := script.NewLoader()
 	scriptEngine := script.NewEngine(cfg.Lua, scriptLoader, cryptoModule, httpModule, hs.Client(), log.Logger)
 	defer scriptEngine.Close()
+
+	// Start metrics server if enabled
+	if cfg.Metrics.Enabled {
+		go metrics.ListenAndServe(ctx, cfg.Metrics.Port)
+	}
 
 	// Create worker
 	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, dc, rs, scriptEngine, domainLimiter)

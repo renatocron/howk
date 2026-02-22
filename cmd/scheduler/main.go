@@ -13,6 +13,7 @@ import (
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/metrics"
 	"github.com/howk/howk/internal/scheduler"
 )
 
@@ -61,6 +62,11 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to create Redis hot state")
 	}
 	defer hs.Close()
+
+	// Start metrics server if enabled
+	if cfg.Metrics.Enabled {
+		go metrics.ListenAndServe(ctx, cfg.Metrics.Port)
+	}
 
 	// Create scheduler
 	sched := scheduler.NewScheduler(cfg.Scheduler, hs, publisher)

@@ -96,77 +96,110 @@ func parseHostList(hosts string) []string {
 // LoadHTTP loads the http module into the Lua state
 func (h *HTTPModule) LoadHTTP(L *lua.LState, namespace string) {
 	httpMod := L.SetFuncs(L.NewTable(), map[string]lua.LGFunction{
-		"get": h.makeHTTPFunc("GET", namespace),
+		"get":    h.makeHTTPFunc("GET", namespace, false),
+		"post":   h.makeHTTPFunc("POST", namespace, true),
+		"put":    h.makeHTTPFunc("PUT", namespace, true),
+		"delete": h.makeHTTPFunc("DELETE", namespace, true),
 	})
-	
+
 	L.PreloadModule("http", func(L *lua.LState) int {
 		L.Push(httpMod)
 		return 1
 	})
 }
 
-// makeHTTPFunc creates an HTTP function for the given method and namespace
-func (h *HTTPModule) makeHTTPFunc(method, namespace string) lua.LGFunction {
+// makeHTTPFunc creates an HTTP function for the given method, namespace, and
+// whether the method accepts a request body.
+//
+// Lua signatures:
+//
+//	http.get(url [, headers [, options]])
+//	http.post(url, body [, headers [, options]])
+//	http.put(url, body [, headers [, options]])
+//	http.delete(url [, body [, headers [, options]]])
+func (h *HTTPModule) makeHTTPFunc(method, namespace string, hasBody bool) lua.LGFunction {
 	return func(L *lua.LState) int {
 		urlStr := L.CheckString(1)
-		
-		// Optional headers table
+
+		// Parse positional args depending on whether method carries a body.
+		var body string
 		var headers map[string]string
-		if L.GetTop() >= 2 {
-			headersTbl := L.OptTable(2, nil)
-			if headersTbl != nil {
-				headers = tableToStringMap(headersTbl)
+		var cacheTTL time.Duration
+
+		argIdx := 2
+		if hasBody {
+			// Body is the second argument (string or nil).
+			if L.GetTop() >= argIdx {
+				if lv := L.Get(argIdx); lv != lua.LNil {
+					body = lv.String()
+				}
+			}
+			argIdx++
+		}
+
+		// Optional headers table
+		if L.GetTop() >= argIdx {
+			if tbl := L.OptTable(argIdx, nil); tbl != nil {
+				headers = tableToStringMap(tbl)
 			}
 		}
-		
+		argIdx++
+
 		// Optional options table (for cache_ttl, etc.)
-		var cacheTTL time.Duration
-		if L.GetTop() >= 3 {
-			optsTbl := L.OptTable(3, nil)
-			if optsTbl != nil {
-				if ttl := optsTbl.RawGetString("cache_ttl"); ttl != lua.LNil {
+		if L.GetTop() >= argIdx {
+			if tbl := L.OptTable(argIdx, nil); tbl != nil {
+				if ttl := tbl.RawGetString("cache_ttl"); ttl != lua.LNil {
 					cacheTTL = time.Duration(lua.LVAsNumber(ttl)) * time.Second
 				}
 			}
 		}
-		
+
 		// Validate URL and check allowlist
 		if err := h.validateHost(urlStr, namespace); err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString(fmt.Sprintf("host validation failed: %v", err)))
 			return 2
 		}
-		
-		// Build cache key
-		cacheKey := h.buildCacheKey(method, namespace, urlStr, headers)
-		
-		// Check cache first
-		if h.cacheEnabled && cacheTTL > 0 {
-			if cached := h.getCached(cacheKey); cached != nil {
-				return h.pushResponse(L, cached)
+
+		// Cache/singleflight only for GET — mutating methods always execute.
+		if method == "GET" {
+			cacheKey := h.buildCacheKey(method, namespace, urlStr, headers)
+
+			if h.cacheEnabled && cacheTTL > 0 {
+				if cached := h.getCached(cacheKey); cached != nil {
+					return h.pushResponse(L, cached)
+				}
 			}
+
+			result, err, _ := h.singleflight.Do(cacheKey, func() (interface{}, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), h.client.Timeout)
+				defer cancel()
+				return h.doRequest(ctx, method, urlStr, "", headers)
+			})
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(fmt.Sprintf("http request failed: %v", err)))
+				return 2
+			}
+
+			resp := result.(*HTTPResponse)
+			if h.cacheEnabled && cacheTTL > 0 {
+				h.setCached(cacheKey, resp, cacheTTL)
+			}
+			return h.pushResponse(L, resp)
 		}
-		
-		// Use singleflight to deduplicate concurrent requests
-		result, err, _ := h.singleflight.Do(cacheKey, func() (interface{}, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), h.client.Timeout)
-			defer cancel()
-			return h.doRequest(ctx, method, urlStr, headers)
-		})
-		
+
+		// Non-GET: no cache, no singleflight.
+		ctx, cancel := context.WithTimeout(context.Background(), h.client.Timeout)
+		defer cancel()
+
+		resp, err := h.doRequest(ctx, method, urlStr, body, headers)
 		if err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString(fmt.Sprintf("http request failed: %v", err)))
 			return 2
 		}
-		
-		resp := result.(*HTTPResponse)
-		
-		// Cache the response if requested
-		if h.cacheEnabled && cacheTTL > 0 {
-			h.setCached(cacheKey, resp, cacheTTL)
-		}
-		
+
 		return h.pushResponse(L, resp)
 	}
 }
@@ -222,8 +255,13 @@ func isHostAllowed(host string, allowlist []string) bool {
 }
 
 // doRequest performs the actual HTTP request
-func (h *HTTPModule) doRequest(ctx context.Context, method, urlStr string, headers map[string]string) (*HTTPResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, method, urlStr, nil)
+func (h *HTTPModule) doRequest(ctx context.Context, method, urlStr, body string, headers map[string]string) (*HTTPResponse, error) {
+	var bodyReader io.Reader
+	if body != "" {
+		bodyReader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, urlStr, bodyReader)
 	if err != nil {
 		return nil, err
 	}
@@ -239,12 +277,12 @@ func (h *HTTPModule) doRequest(ctx context.Context, method, urlStr string, heade
 	}
 	defer resp.Body.Close()
 	
-	// Read body
-	body, err := io.ReadAll(resp.Body)
+	// Read response body
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-	
+
 	// Extract response headers
 	respHeaders := make(map[string]string)
 	for k, v := range resp.Header {
@@ -252,10 +290,10 @@ func (h *HTTPModule) doRequest(ctx context.Context, method, urlStr string, heade
 			respHeaders[k] = v[0]
 		}
 	}
-	
+
 	return &HTTPResponse{
 		StatusCode: resp.StatusCode,
-		Body:       string(body),
+		Body:       string(respBody),
 		Headers:    respHeaders,
 	}, nil
 }

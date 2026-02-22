@@ -90,6 +90,10 @@ data:
       timeout: {{ .Values.config.lua.timeout | quote }}
       memory_limit_mb: {{ .Values.config.lua.memoryLimitMb }}
 
+    metrics:
+      enabled: {{ .Values.config.metrics.enabled }}
+      port: {{ .Values.config.metrics.port }}
+
     transformer:
       enabled: {{ .Values.config.transformer.enabled }}
       script_dirs:

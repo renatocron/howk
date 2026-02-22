@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/howk/howk/internal/domain"
+	"github.com/howk/howk/internal/metrics"
 	"github.com/rs/zerolog/log"
 )
 
@@ -74,6 +75,8 @@ func (s *Server) processEnqueue(c *gin.Context, configID string, reqs []EnqueueR
 		})
 		accepted++
 	}
+
+	metrics.WebhooksReceived.Add(float64(accepted))
 
 	// Record stats
 	bucket := time.Now().Format("2006010215")

@@ -14,6 +14,7 @@ import (
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/metrics"
 	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/script/modules"
 	"github.com/howk/howk/internal/transformer"
@@ -125,6 +126,11 @@ func main() {
 	serverOpts := []api.ServerOption{}
 	if transformerRegistry != nil && transformerEngine != nil {
 		serverOpts = append(serverOpts, api.WithTransformers(transformerRegistry, transformerEngine))
+	}
+
+	// Start metrics server if enabled
+	if cfg.Metrics.Enabled {
+		go metrics.ListenAndServe(ctx, cfg.Metrics.Port)
 	}
 
 	// Create and run API server

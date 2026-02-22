@@ -45,6 +45,11 @@ spec:
       annotations:
         # Force redeployment when main config changes
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.config.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.config.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
         {{- if .Values.config.transformer.enabled }}
         checksum/transformer-configs: {{ include (print $.Template.BasePath "/transformer-configmap.yaml") . | sha256sum }}
         {{- end }}
@@ -65,6 +70,10 @@ spec:
           ports:
             - containerPort: {{ .Values.config.api.port }}
               name: http
+            {{- if .Values.config.metrics.enabled }}
+            - containerPort: {{ .Values.config.metrics.port }}
+              name: metrics
+            {{- end }}
           env:
             - name: HOWK_CONFIG
               value: /config/config.yaml

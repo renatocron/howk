@@ -13,6 +13,7 @@ import (
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/metrics"
 	"github.com/howk/howk/internal/retry"
 	"github.com/howk/howk/internal/script"
 )
@@ -116,6 +117,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 
 	if !allowed {
 		logger.Debug().Msg("Circuit open, scheduling retry")
+		metrics.DeliveriesTotal.WithLabelValues("circuit_open").Inc()
 		return w.scheduleRetryForCircuit(ctx, &webhook, domain.CircuitOpen)
 	}
 
@@ -276,6 +278,9 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 
 	// Handle success
 	if deliveryResult.Success {
+		metrics.DeliveriesTotal.WithLabelValues("success").Inc()
+		metrics.DeliveryDuration.Observe(result.Duration.Seconds())
+
 		logger.Info().
 			Int("status_code", result.StatusCode).
 			Dur("duration", result.Duration).
@@ -326,6 +331,9 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 	deliveryResult.ShouldRetry = shouldRetry
 
 	if shouldRetry {
+		metrics.DeliveriesTotal.WithLabelValues("failure").Inc()
+		metrics.DeliveryDuration.Observe(result.Duration.Seconds())
+
 		// Schedule retry
 		nextRetryAt := w.retry.NextRetryAt(webhook.Attempt, circuitState)
 		deliveryResult.NextRetryAt = nextRetryAt
@@ -353,6 +361,9 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		// Record stats
 		w.recordStats(ctx, "failed", &webhook)
 	} else {
+		metrics.DeliveriesTotal.WithLabelValues("exhausted").Inc()
+		metrics.DeliveryDuration.Observe(result.Duration.Seconds())
+
 		// No retry - send to dead letter queue
 		// Determine the reason type
 		var reasonType domain.DeadLetterReason

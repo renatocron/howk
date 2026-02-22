@@ -32,6 +32,7 @@ type Config struct {
 	Lua            LuaConfig            `mapstructure:"lua"`
 	Concurrency    ConcurrencyConfig    `mapstructure:"concurrency"`
 	Transformer    TransformerConfig    `mapstructure:"transformer"`
+	Metrics        MetricsConfig        `mapstructure:"metrics"`
 }
 
 type APIConfig struct {
@@ -158,6 +159,12 @@ type LuaConfig struct {
 	HTTPCacheTTL     time.Duration `mapstructure:"http_cache_ttl"`
 }
 
+// MetricsConfig configures the Prometheus metrics endpoint
+type MetricsConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+	Port    int  `mapstructure:"port"`
+}
+
 // TransformerConfig configures the API-side Lua transformer feature for incoming webhook fan-out
 type TransformerConfig struct {
 	Enabled       bool          `mapstructure:"enabled"`         // default: false
@@ -262,6 +269,10 @@ func DefaultConfig() *Config {
 			PasswdDirs:    []string{}, // Empty means use ScriptDirs
 			Timeout:       500 * time.Millisecond,
 			MemoryLimitMB: 50,
+		},
+		Metrics: MetricsConfig{
+			Enabled: false, // Feature flag - must be explicitly enabled
+			Port:    9090,
 		},
 	}
 }
@@ -408,6 +419,9 @@ func bindEnvVariables(v *viper.Viper) error {
 		"transformer.passwd_dirs",
 		"transformer.timeout",
 		"transformer.memory_limit_mb",
+		// Metrics
+		"metrics.enabled",
+		"metrics.port",
 	}
 
 	for _, key := range keys {
