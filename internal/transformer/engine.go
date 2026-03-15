@@ -19,6 +19,7 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
+	"github.com/howk/howk/internal/luasandbox"
 	"github.com/howk/howk/internal/script/modules"
 )
 
@@ -87,56 +88,7 @@ func NewEngine(
 
 // newLuaState creates a new sandboxed Lua state with resource limits
 func (e *Engine) newLuaState() *lua.LState {
-	opts := lua.Options{
-		SkipOpenLibs: true, // Only open safe libraries
-	}
-
-	// Set registry limits based on memory limit
-	if e.cfg.MemoryLimitMB > 0 {
-		maxEntries := e.cfg.MemoryLimitMB * 131072 // Approximate
-		opts.RegistrySize = maxEntries
-		opts.RegistryMaxSize = maxEntries
-	}
-
-	L := lua.NewState(opts)
-
-	// Open safe standard libraries
-	for _, pair := range []struct {
-		n string
-		f lua.LGFunction
-	}{
-		{lua.LoadLibName, lua.OpenPackage},
-		{lua.BaseLibName, lua.OpenBase},
-		{lua.TabLibName, lua.OpenTable},
-		{lua.StringLibName, lua.OpenString},
-		{lua.MathLibName, lua.OpenMath},
-	} {
-		if err := L.CallByParam(lua.P{
-			Fn:      L.NewFunction(pair.f),
-			NRet:    0,
-			Protect: true,
-		}, lua.LString(pair.n)); err != nil {
-			panic(err)
-		}
-	}
-
-	// Remove unsafe functions
-	L.SetGlobal("dofile", lua.LNil)
-	L.SetGlobal("loadfile", lua.LNil)
-	L.SetGlobal("load", lua.LNil)
-
-	// Disable unsafe modules
-	packageTable := L.GetGlobal("package").(*lua.LTable)
-	preloadTable := packageTable.RawGetString("preload").(*lua.LTable)
-	preloadTable.RawSetString("io", lua.LNil)
-	preloadTable.RawSetString("os", lua.LNil)
-	preloadTable.RawSetString("debug", lua.LNil)
-
-	// Load built-in modules
-	luajson.Preload(L)
-	modules.LoadBase64(L)
-
-	return L
+	return luasandbox.NewState(e.cfg.MemoryLimitMB)
 }
 
 // Execute runs a transformer script with the given input

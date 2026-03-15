@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/howk/howk/internal/domain"
+	"github.com/howk/howk/internal/hotstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -175,7 +177,7 @@ func TestHandleGetScript_Success(t *testing.T) {
 func TestHandleGetScript_NotFound(t *testing.T) {
 	server, _, mockHS, _, _ := setupTestServer(t)
 
-	mockHS.On("GetScript", mock.Anything, domain.ConfigID("test-config")).Return("", errors.New("not found"))
+	mockHS.On("GetScript", mock.Anything, domain.ConfigID("test-config")).Return("", fmt.Errorf("%w: test-config", hotstate.ErrScriptNotFound))
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

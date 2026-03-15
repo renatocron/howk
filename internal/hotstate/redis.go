@@ -3,6 +3,7 @@ package hotstate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -29,6 +30,12 @@ const (
 	canaryKey               = "howk:system:initialized"
 	reconcilerLockKey       = "howk:reconciler:lock"
 )
+
+// ErrScriptNotFound is returned when a script is not found in Redis.
+var ErrScriptNotFound = errors.New("script not found")
+
+// Compile-time interface assertion.
+var _ HotState = (*RedisHotState)(nil)
 
 // RedisHotState implements HotState using Redis
 type RedisHotState struct {
@@ -628,7 +635,7 @@ func (r *RedisHotState) GetScript(ctx context.Context, configID domain.ConfigID)
 	key := scriptPrefix + string(configID)
 	data, err := r.rdb.Get(ctx, key).Result()
 	if err == redis.Nil {
-		return "", fmt.Errorf("script not found for config_id: %s", configID)
+		return "", fmt.Errorf("%w: %s", ErrScriptNotFound, configID)
 	}
 	if err != nil {
 		return "", fmt.Errorf("get script: %w", err)
@@ -662,8 +669,12 @@ func (r *RedisHotState) Ping(ctx context.Context) error {
 }
 
 func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
+	var errs []error
+
 	// Remove canary first (signals other instances that rebuild is in progress)
-	r.DelCanary(ctx)
+	if err := r.DelCanary(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("del canary: %w", err))
+	}
 
 	// Only flush our keys, not the entire database
 	patterns := []string{
@@ -681,7 +692,9 @@ func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
 
 	for _, pattern := range patterns {
 		if pattern == retryQueue {
-			r.rdb.Del(ctx, retryQueue)
+			if err := r.rdb.Del(ctx, retryQueue).Err(); err != nil {
+				errs = append(errs, fmt.Errorf("del %s: %w", retryQueue, err))
+			}
 			continue
 		}
 
@@ -690,16 +703,20 @@ func (r *RedisHotState) FlushForRebuild(ctx context.Context) error {
 		for iter.Next(ctx) {
 			keys = append(keys, iter.Val())
 			if len(keys) >= 1000 {
-				r.rdb.Del(ctx, keys...)
+				if err := r.rdb.Del(ctx, keys...).Err(); err != nil {
+					errs = append(errs, fmt.Errorf("del batch for %s: %w", pattern, err))
+				}
 				keys = keys[:0]
 			}
 		}
 		if len(keys) > 0 {
-			r.rdb.Del(ctx, keys...)
+			if err := r.rdb.Del(ctx, keys...).Err(); err != nil {
+				errs = append(errs, fmt.Errorf("del batch for %s: %w", pattern, err))
+			}
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 func (r *RedisHotState) Close() error {

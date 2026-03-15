@@ -1,7 +1,7 @@
 package transformer
 
 import (
-	"bytes"
+	"crypto/subtle"
 	"fmt"
 	"strings"
 
@@ -68,8 +68,8 @@ func (a *AuthConfig) Check(username, password string) bool {
 		return checkBcrypt(password, storedPassword)
 	}
 
-	// Plaintext comparison (not recommended for production)
-	return storedPassword == password
+	// Constant-time comparison to prevent timing attacks
+	return SecureCompare(storedPassword, password)
 }
 
 // isBcryptHash checks if the stored password looks like a bcrypt hash
@@ -119,5 +119,5 @@ func HashPassword(password string) (string, error) {
 // SecureCompare performs constant-time comparison of two strings
 // to prevent timing attacks
 func SecureCompare(a, b string) bool {
-	return bytes.Equal([]byte(a), []byte(b))
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }

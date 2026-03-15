@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
+	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/script"
 )
 
@@ -22,6 +24,7 @@ type UploadScriptRequest struct {
 
 type ScriptResponse struct {
 	ConfigID  string    `json:"config_id"`
+	LuaCode   string    `json:"lua_code,omitempty"`
 	Hash      string    `json:"hash"`
 	Version   string    `json:"version"`
 	CreatedAt time.Time `json:"created_at"`
@@ -112,7 +115,12 @@ func (s *Server) handleGetScript(c *gin.Context) {
 	// Try to get from Redis cache first
 	scriptJSON, err := s.hotstate.GetScript(c.Request.Context(), configID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Script not found"})
+		if errors.Is(err, hotstate.ErrScriptNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Script not found"})
+		} else {
+			s.logger.Error().Err(err).Str("config_id", string(configID)).Msg("Failed to get script from Redis")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve script"})
+		}
 		return
 	}
 
@@ -125,13 +133,13 @@ func (s *Server) handleGetScript(c *gin.Context) {
 	}
 
 	// Return response with full script code
-	c.JSON(http.StatusOK, gin.H{
-		"config_id":  string(scriptConfig.ConfigID),
-		"lua_code":   scriptConfig.LuaCode,
-		"hash":       scriptConfig.Hash,
-		"version":    scriptConfig.Version,
-		"created_at": scriptConfig.CreatedAt,
-		"updated_at": scriptConfig.UpdatedAt,
+	c.JSON(http.StatusOK, ScriptResponse{
+		ConfigID:  string(scriptConfig.ConfigID),
+		LuaCode:   scriptConfig.LuaCode,
+		Hash:      scriptConfig.Hash,
+		Version:   scriptConfig.Version,
+		CreatedAt: scriptConfig.CreatedAt,
+		UpdatedAt: scriptConfig.UpdatedAt,
 	})
 }
 

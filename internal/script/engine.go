@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
-	luajson "layeh.com/gopher-json"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
+	"github.com/howk/howk/internal/luasandbox"
 	"github.com/howk/howk/internal/script/modules"
 )
 
@@ -31,10 +32,6 @@ type Engine struct {
 
 // NewEngine creates a new Lua script engine with optional crypto, http, and redis modules
 func NewEngine(cfg config.LuaConfig, loader *Loader, crypto *modules.CryptoModule, http *modules.HTTPModule, rdb *redis.Client, logger zerolog.Logger) *Engine {
-	// Create default logger if not provided
-	if logger.GetLevel() == 0 {
-		logger = zerolog.New(nil).Level(zerolog.Disabled)
-	}
 	
 	// Create log module
 	logModule := modules.NewLogModule(logger)
@@ -61,60 +58,7 @@ func NewEngine(cfg config.LuaConfig, loader *Loader, crypto *modules.CryptoModul
 
 // newLuaState creates a new sandboxed Lua state with resource limits
 func (e *Engine) newLuaState() *lua.LState {
-	// Configure options with resource limits if configured
-	opts := lua.Options{
-		SkipOpenLibs: true, // We'll open only safe libraries
-	}
-	
-	// Set registry limits based on memory limit (approximate)
-	// Each registry entry is roughly a pointer size, so we estimate
-	if e.config.MemoryLimitMB > 0 {
-		// Approximate: 1MB ~ 131072 entries (assuming 8 bytes per entry)
-		// This is a rough approximation - actual memory usage depends on data stored
-		maxEntries := e.config.MemoryLimitMB * 131072
-		opts.RegistrySize = maxEntries
-		opts.RegistryMaxSize = maxEntries
-	}
-
-	L := lua.NewState(opts)
-
-	// Open safe standard libraries
-	for _, pair := range []struct {
-		n string
-		f lua.LGFunction
-	}{
-		{lua.LoadLibName, lua.OpenPackage},  // Needed for require()
-		{lua.BaseLibName, lua.OpenBase},     // Basic functions (print, type, etc.)
-		{lua.TabLibName, lua.OpenTable},     // Table manipulation
-		{lua.StringLibName, lua.OpenString}, // String manipulation
-		{lua.MathLibName, lua.OpenMath},     // Math functions
-	} {
-		if err := L.CallByParam(lua.P{
-			Fn:      L.NewFunction(pair.f),
-			NRet:    0,
-			Protect: true,
-		}, lua.LString(pair.n)); err != nil {
-			panic(err)
-		}
-	}
-
-	// Remove unsafe functions from base library
-	L.SetGlobal("dofile", lua.LNil)
-	L.SetGlobal("loadfile", lua.LNil)
-	L.SetGlobal("load", lua.LNil)
-
-	// Disable unsafe modules by removing them from package.preload
-	packageTable := L.GetGlobal("package").(*lua.LTable)
-	preloadTable := packageTable.RawGetString("preload").(*lua.LTable)
-
-	// Remove dangerous modules
-	preloadTable.RawSetString("io", lua.LNil)
-	preloadTable.RawSetString("os", lua.LNil)
-	preloadTable.RawSetString("debug", lua.LNil)
-
-	// Load built-in modules
-	luajson.Preload(L)     // JSON encode/decode
-	modules.LoadBase64(L)  // Base64 encode/decode
+	L := luasandbox.NewState(e.config.MemoryLimitMB)
 
 	// Load crypto module if available
 	if e.crypto != nil {
@@ -265,7 +209,7 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, luaCode strin
 		// Check for memory limit errors
 		// Only check when memory limit is actually configured
 		errStr := err.Error()
-		if e.config.MemoryLimitMB > 0 && containsSubstring(errStr, "registry overflow") {
+		if e.config.MemoryLimitMB > 0 && strings.Contains(errStr, "registry overflow") {
 			return nil, &ScriptError{
 				Type:    ScriptErrorMemoryLimit,
 				Message: fmt.Sprintf("Script exceeded memory limit of %d MB", e.config.MemoryLimitMB),
@@ -284,18 +228,6 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, luaCode strin
 	return e.extractTransformation(L), nil
 }
 
-// containsSubstring checks if a string contains a substring
-func containsSubstring(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
 
 // injectInputGlobals sets up the input globals for the script
 func (e *Engine) injectInputGlobals(L *lua.LState, webhook *domain.Webhook) error {
@@ -428,18 +360,8 @@ func (e *Engine) GetHTTP() *modules.HTTPModule {
 // If config_id contains ":", takes the part before the first ":"
 // Otherwise, uses the entire config_id
 func extractNamespace(configID string) string {
-	if idx := findFirstColon(configID); idx != -1 {
+	if idx := strings.Index(configID, ":"); idx != -1 {
 		return configID[:idx]
 	}
 	return configID
-}
-
-// findFirstColon finds the index of the first colon in a string
-func findFirstColon(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == ':' {
-			return i
-		}
-	}
-	return -1
 }
