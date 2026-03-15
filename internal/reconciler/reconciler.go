@@ -50,10 +50,7 @@ func NewReconciler(cfg config.KafkaConfig, hs hotstate.HotState, ttlCfg config.T
 // 1. The reconciler is meant for disaster recovery (Redis completely lost)
 // 2. Workers will naturally overwrite Redis state after reconciliation completes
 // 3. The compacted topic always has the authoritative state
-func (r *Reconciler) Run(ctx context.Context, fromBeginning bool) error {
-	// Ignore fromBeginning - we always read from beginning for compacted topics
-	_ = fromBeginning
-
+func (r *Reconciler) Run(ctx context.Context) error {
 	log.Info().Msg("Starting zero-maintenance reconciliation from howk.state topic...")
 
 	// 1. Flush Redis state before rebuilding

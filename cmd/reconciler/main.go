@@ -17,7 +17,6 @@ import (
 
 func main() {
 	// Parse flags
-	fromBeginning := flag.Bool("from-beginning", false, "Start reconciliation from the beginning of the Kafka topic")
 	configPath := flag.String("config", "", "Path to config file (optional)")
 	flag.Parse()
 
@@ -60,7 +59,7 @@ func main() {
 	// Create and run reconciler
 	rec := reconciler.NewReconciler(cfg.Kafka, hs, cfg.TTL)
 
-	if err := rec.Run(ctx, *fromBeginning); err != nil {
+	if err := rec.Run(ctx); err != nil {
 		if err == context.Canceled {
 			log.Info().Msg("Reconciliation cancelled")
 		} else {

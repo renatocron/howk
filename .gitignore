@@ -40,3 +40,6 @@ config.yaml
 .env
 .env.local
 .env.*.local
+
+# Desloppify local state
+.desloppify/

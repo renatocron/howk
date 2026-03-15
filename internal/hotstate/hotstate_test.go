@@ -388,11 +388,17 @@ func TestRedisHotState_FlushForRebuild(t *testing.T) {
 	ctx := context.Background()
 	state, mockClient := newMockedHotState(t, defaultCircuitConfig)
 
+	// DelCanary is called first
+	mockClient.ExpectDel("howk:system:initialized").SetVal(1)
+
 	// For pattern matching scans
 	mockClient.ExpectScan(0, "status:*", 1000).SetVal([]string{"status:wh-123"}, 0)
 	mockClient.ExpectDel("status:wh-123").SetVal(1)
 
 	mockClient.ExpectDel("retries").SetVal(0)
+
+	mockClient.ExpectScan(0, "retry_data:*", 1000).SetVal([]string{}, 0)
+	mockClient.ExpectScan(0, "retry_meta:*", 1000).SetVal([]string{}, 0)
 
 	mockClient.ExpectScan(0, "processed:*", 1000).SetVal([]string{"processed:wh-123:1"}, 0)
 	mockClient.ExpectDel("processed:wh-123:1").SetVal(1)
@@ -402,6 +408,10 @@ func TestRedisHotState_FlushForRebuild(t *testing.T) {
 	mockClient.ExpectScan(0, "hll:*", 1000).SetVal([]string{}, 0)
 
 	mockClient.ExpectScan(0, "circuit:*", 1000).SetVal([]string{}, 0)
+
+	mockClient.ExpectScan(0, "inflight:*", 1000).SetVal([]string{}, 0)
+
+	mockClient.ExpectScan(0, "domain_concurrency:*", 1000).SetVal([]string{}, 0)
 
 	err := state.FlushForRebuild(ctx)
 	require.NoError(t, err)

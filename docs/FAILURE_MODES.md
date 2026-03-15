@@ -89,7 +89,7 @@ if !hotstate.CheckCanary() {
     locked, unlock := hotstate.AcquireReconcilerLock(10 * time.Minute)
     if locked {
         // I am the reconciler
-        reconciler.Run(ctx, true)
+        reconciler.Run(ctx)
         hotstate.SetCanary()
         unlock()
     } else {
@@ -106,7 +106,7 @@ if !hotstate.CheckCanary() {
 if !hotstate.CheckCanary() {
     consumer.Pause()
     if acquired, unlock := hotstate.AcquireReconcilerLock(10 * time.Minute); acquired {
-        reconciler.Run(ctx, true)
+        reconciler.Run(ctx)
         hotstate.SetCanary()
         unlock()
     }

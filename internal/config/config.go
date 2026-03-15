@@ -16,7 +16,7 @@ type TTLConfig struct {
 	StatusTTL       time.Duration `mapstructure:"status_ttl"`
 	StatsTTL        time.Duration `mapstructure:"stats_ttl"`
 	IdempotencyTTL  time.Duration `mapstructure:"idempotency_ttl"`
-	RetryDataTTL    time.Duration `mapstructure:"retry_data_ttl"` // NEW: TTL for compressed retry data
+	RetryDataTTL    time.Duration `mapstructure:"retry_data_ttl"`
 }
 
 // Config is the root configuration

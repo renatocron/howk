@@ -2,6 +2,7 @@ package transformer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,12 +49,14 @@ func NewRegistry(cfg config.TransformerConfig) *Registry {
 func (r *Registry) Load() error {
 	newScripts := make(map[string]*TransformerScript)
 
+	var errs []error
 	for _, dir := range r.cfg.ScriptDirs {
 		if err := r.loadFromDir(dir, newScripts); err != nil {
 			r.logger.Error().
 				Str("dir", dir).
 				Err(err).
 				Msg("Failed to load scripts from directory")
+			errs = append(errs, fmt.Errorf("load %s: %w", dir, err))
 			// Continue with other directories rather than failing completely
 		}
 	}
@@ -67,7 +70,7 @@ func (r *Registry) Load() error {
 		Int("count", len(newScripts)).
 		Msg("Loaded transformer scripts")
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // Reload performs a hot reload of all scripts (call on SIGHUP)
