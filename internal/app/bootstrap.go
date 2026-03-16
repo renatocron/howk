@@ -13,15 +13,22 @@ import (
 	"github.com/howk/howk/internal/config"
 )
 
-// Bootstrap initializes common application components
-// Returns the loaded configuration or an error
+// Bootstrap initializes common application components and returns the loaded
+// configuration. configPath may be empty; if so, Bootstrap falls back to the
+// HOWK_CONFIG environment variable and then to built-in defaults.
 func Bootstrap(configPath string) (*config.Config, error) {
 	// Setup logging
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
+	// Resolve config path: explicit flag > HOWK_CONFIG env var > defaults
+	cfgPath := configPath
+	if cfgPath == "" {
+		cfgPath = os.Getenv("HOWK_CONFIG")
+	}
+
 	// Load config
-	cfg, err := config.LoadConfig(configPath)
+	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		return nil, err
 	}

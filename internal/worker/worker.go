@@ -50,25 +50,25 @@ func WithScriptConsumer(consumer *script.Consumer) WorkerOption {
 // to configure optional dependencies at construction time.
 func NewWorker(
 	cfg *config.Config,
-	brk broker.Broker,
-	pub broker.WebhookPublisher,
-	hs hotstate.HotState,
-	dc delivery.Deliverer,
-	rs retry.Retrier,
-	se *script.Engine,
-	dl delivery.DomainLimiter,
+	kafkaBroker broker.Broker,
+	publisher broker.WebhookPublisher,
+	hotState hotstate.HotState,
+	deliveryClient delivery.Deliverer,
+	retryStrategy retry.Retrier,
+	scriptEngine *script.Engine,
+	domainLimiter delivery.DomainLimiter,
 	opts ...WorkerOption,
 ) *Worker {
 	w := &Worker{
 		config:        cfg,
-		broker:        brk,
-		publisher:     pub,
-		hotstate:      hs,
-		circuit:       hs.CircuitBreaker(),
-		delivery:      dc,
-		domainLimiter: dl,
-		retry:         rs,
-		scriptEngine:  se,
+		broker:        kafkaBroker,
+		publisher:     publisher,
+		hotstate:      hotState,
+		circuit:       hotState.CircuitBreaker(),
+		delivery:      deliveryClient,
+		domainLimiter: domainLimiter,
+		retry:         retryStrategy,
+		scriptEngine:  scriptEngine,
 	}
 	for _, opt := range opts {
 		opt(w)

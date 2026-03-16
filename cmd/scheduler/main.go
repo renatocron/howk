@@ -1,17 +1,12 @@
 package main
 
 import (
-	"context"
 	"flag"
-	"os"
-	"os/signal"
-	"syscall"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/howk/howk/internal/app"
 	"github.com/howk/howk/internal/broker"
-	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/metrics"
 	"github.com/howk/howk/internal/scheduler"
@@ -22,29 +17,19 @@ func main() {
 	configPath := flag.String("config", "", "Path to config file (optional)")
 	flag.Parse()
 
-	// Setup logging
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-
-	// Determine config path: flag > env var > empty (uses defaults)
-	cfgPath := *configPath
-	if cfgPath == "" {
-		cfgPath = os.Getenv("HOWK_CONFIG")
-	}
-
-	// Load config
-	cfg, err := config.LoadConfig(cfgPath)
+	// Bootstrap: logging + config (also checks HOWK_CONFIG env var)
+	cfg, err := app.Bootstrap(*configPath)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load configuration")
 	}
 
-	// Setup context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Register Prometheus metrics with the default global registry.
+	// Explicit registration avoids duplicate-registration panics in tests.
+	metrics.Register(nil)
 
-	// Handle shutdown signals
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// Setup context and signal handler
+	ctx, cancel := app.SetupSignalHandler()
+	defer cancel()
 
 	// Initialize Kafka broker
 	kafkaBroker, err := broker.NewKafkaBroker(cfg.Kafka)
@@ -80,7 +65,5 @@ func main() {
 	}()
 
 	// Wait for shutdown signal
-	<-sigCh
-	log.Info().Msg("Shutdown signal received")
-	cancel()
+	<-ctx.Done()
 }
