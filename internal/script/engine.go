@@ -109,8 +109,8 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 		}
 	}
 
-	// Extract namespace from config_id
-	namespace := extractNamespace(string(webhook.ConfigID))
+	// Extract namespace from config_id (shared logic in modules package)
+	namespace := modules.ExtractNamespace(string(webhook.ConfigID))
 
 	// Set up timeout that covers the entire execution
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)
@@ -356,12 +356,3 @@ func (e *Engine) GetHTTP() *modules.HTTPModule {
 	return e.http
 }
 
-// extractNamespace extracts the namespace from config_id
-// If config_id contains ":", takes the part before the first ":"
-// Otherwise, uses the entire config_id
-func extractNamespace(configID string) string {
-	if idx := strings.Index(configID, ":"); idx != -1 {
-		return configID[:idx]
-	}
-	return configID
-}

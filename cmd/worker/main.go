@@ -134,11 +134,9 @@ func main() {
 		go metrics.ListenAndServe(ctx, cfg.Metrics.Port)
 	}
 
-	// Create worker
-	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, dc, rs, scriptEngine, domainLimiter)
-
-	// Initialize and start script consumer if Lua is enabled
-	// This ensures the worker has scripts even if Redis is flushed
+	// Build worker options. Script consumer is wired at construction time via
+	// WithScriptConsumer to avoid fragile post-construction setter calls.
+	var workerOpts []worker.WorkerOption
 	if cfg.Lua.Enabled {
 		scriptConsumer := script.NewScriptConsumer(
 			kafkaBroker,
@@ -146,20 +144,13 @@ func main() {
 			hs,
 			cfg.Kafka.Topics.Scripts,
 			cfg.Kafka.ConsumerGroup+"-scripts", // Separate consumer group for scripts
-			24*time.Hour,                      // Script cache TTL
+			24*time.Hour,                       // Script cache TTL
 		)
-		w.SetScriptConsumer(scriptConsumer)
-
-		// Start script consumer in background
-		if err := scriptConsumer.Start(ctx); err != nil {
-			log.Error().Err(err).Msg("Failed to start script consumer, continuing with lazy loading only")
-		} else {
-			log.Info().
-				Str("topic", cfg.Kafka.Topics.Scripts).
-				Str("consumer_group", cfg.Kafka.ConsumerGroup+"-scripts").
-				Msg("Script consumer started - scripts will be synchronized from Kafka")
-		}
+		workerOpts = append(workerOpts, worker.WithScriptConsumer(scriptConsumer))
 	}
+
+	// Create worker with all dependencies resolved at construction time
+	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, dc, rs, scriptEngine, domainLimiter, workerOpts...)
 
 	// Run worker
 	go func() {

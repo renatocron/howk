@@ -462,17 +462,45 @@ func TestWorkerGetRetry(t *testing.T) {
 	assert.Equal(t, retrier, w.GetRetry())
 }
 
-// TestWorkerSetScriptConsumer tests the SetScriptConsumer and GetScriptConsumer accessors
-func TestWorkerSetScriptConsumer(t *testing.T) {
+// TestWorkerGetScriptConsumer_NilByDefault verifies a worker constructed without
+// WithScriptConsumer has a nil script consumer (the safe default).
+func TestWorkerGetScriptConsumer_NilByDefault(t *testing.T) {
 	w, _, _, _, _, _, _ := setupWorkerTest()
-
-	// Initially nil
 	assert.Nil(t, w.GetScriptConsumer())
+}
 
-	// Set a mock consumer (we can't create a real one without Kafka, but we can test the setter)
-	// Just verify the method exists and can be called
-	// The actual consumer would be created elsewhere
+// TestWorkerWithScriptConsumer_Option verifies that WithScriptConsumer injects
+// the consumer at construction time, eliminating the post-construction setter.
+func TestWorkerWithScriptConsumer_Option(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mockBroker := new(MockBroker)
+	mockPublisher := new(MockPublisher)
+	mockHotState := new(MockHotState)
+	mockCircuitBreaker := new(mocks.MockCircuitBreaker)
+	mockDeliveryClient := new(MockDeliveryClient)
+	mockRetryStrategy := new(MockRetryStrategy)
+	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
 
-	// For this test, we just verify the initial state is nil
-	// The SetScriptConsumer would be tested in integration tests
+	testScriptLoader := script.NewLoader()
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})
+
+	// Construct a ScriptConsumer stand-in via the real constructor with a nil broker;
+	// we only need a non-nil pointer to verify the option wiring -- not to start it.
+	// Use a real (but inert) ScriptConsumer constructed with a mock broker.
+	dummyConsumer := script.NewScriptConsumer(mockBroker, testScriptLoader, mockHotState, "test.scripts", "test-group", 24*time.Hour)
+
+	w := worker.NewWorker(
+		cfg,
+		mockBroker,
+		mockPublisher,
+		mockHotState,
+		mockDeliveryClient,
+		mockRetryStrategy,
+		testScriptEngine,
+		nil,
+		worker.WithScriptConsumer(dummyConsumer),
+	)
+
+	assert.NotNil(t, w.GetScriptConsumer())
+	assert.Equal(t, dummyConsumer, w.GetScriptConsumer())
 }

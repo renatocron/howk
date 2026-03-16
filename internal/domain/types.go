@@ -58,26 +58,30 @@ type DeliveryResult struct {
 	Webhook *Webhook `json:"webhook,omitempty"`
 }
 
+// WebhookState represents the delivery lifecycle state of a webhook.
+// It mirrors the CircuitState pattern for type-safe state comparisons.
+type WebhookState string
+
 // WebhookStatus represents the current state of a webhook
 type WebhookStatus struct {
-	WebhookID      WebhookID  `json:"webhook_id"`
-	State          string     `json:"state"` // pending, delivering, delivered, failed, exhausted
-	Attempts       int        `json:"attempts"`
-	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
-	LastStatusCode int        `json:"last_status_code,omitempty"`
-	LastError      string     `json:"last_error,omitempty"`
-	NextRetryAt    *time.Time `json:"next_retry_at,omitempty"`
-	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
-	UpdatedAtNs    int64      `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
+	WebhookID      WebhookID    `json:"webhook_id"`
+	State          WebhookState `json:"state"`
+	Attempts       int          `json:"attempts"`
+	LastAttemptAt  *time.Time   `json:"last_attempt_at,omitempty"`
+	LastStatusCode int          `json:"last_status_code,omitempty"`
+	LastError      string       `json:"last_error,omitempty"`
+	NextRetryAt    *time.Time   `json:"next_retry_at,omitempty"`
+	DeliveredAt    *time.Time   `json:"delivered_at,omitempty"`
+	UpdatedAtNs    int64        `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
 }
 
-// State constants
+// WebhookState constants representing the delivery lifecycle.
 const (
-	StatePending    = "pending"
-	StateDelivering = "delivering"
-	StateDelivered  = "delivered"
-	StateFailed     = "failed"
-	StateExhausted  = "exhausted"
+	StatePending    WebhookState = "pending"
+	StateDelivering WebhookState = "delivering"
+	StateDelivered  WebhookState = "delivered"
+	StateFailed     WebhookState = "failed"
+	StateExhausted  WebhookState = "exhausted"
 )
 
 // CircuitState represents the circuit breaker state
@@ -195,8 +199,8 @@ type WebhookStateSnapshot struct {
 	ScriptHash     string            `json:"script_hash,omitempty"`
 
 	// State Info
-	State       string    `json:"state"`
-	Attempt     int       `json:"attempt"`
+	State       WebhookState `json:"state"`
+	Attempt     int          `json:"attempt"`
 	MaxAttempts int       `json:"max_attempts"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAtNs int64     `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution

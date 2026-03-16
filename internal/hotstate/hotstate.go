@@ -16,24 +16,30 @@ type HotState interface {
 	GetStatus(ctx context.Context, webhookID domain.WebhookID) (*domain.WebhookStatus, error)
 
 	// Retry scheduling (Reference-Based with Visibility Timeout)
+
 	// EnsureRetryData ensures the webhook data exists in Redis.
 	// If it exists, it only refreshes the TTL (efficient - no compression/payload transfer).
 	// If it does not exist, it compresses and stores it.
 	EnsureRetryData(ctx context.Context, webhook *domain.Webhook, ttl time.Duration) error
-	// ScheduleRetry schedules the reference in ZSET
+
 	ScheduleRetry(ctx context.Context, webhookID domain.WebhookID, attempt int, scheduledAt time.Time, reason string) error
-	// PopAndLockRetries atomically pops due retries and pushes their score to the future (visibility timeout)
-	// Returns list of references (webhook_id:attempt)
+
+	// PopAndLockRetries atomically pops due retries and bumps their score to now+lockDuration
+	// (visibility timeout), preventing duplicate processing. Returns references (webhook_id:attempt).
 	PopAndLockRetries(ctx context.Context, limit int, lockDuration time.Duration) ([]string, error)
-	// GetRetryData retrieves and decompresses webhook data by webhookID
+
 	GetRetryData(ctx context.Context, webhookID domain.WebhookID) (*domain.Webhook, error)
-	// AckRetry confirms processing and deletes reference from ZSET + metadata (NOT data)
+
+	// AckRetry removes the reference from the ZSET and its metadata. It does NOT delete
+	// the compressed webhook data, which is shared across attempts and removed only on
+	// terminal state via DeleteRetryData.
 	AckRetry(ctx context.Context, reference string) error
-	// DeleteRetryData deletes the compressed webhook data (called on terminal state)
+
+	// DeleteRetryData removes the compressed webhook payload. Call only on terminal states
+	// (success or DLQ/exhaustion) to free storage.
 	DeleteRetryData(ctx context.Context, webhookID domain.WebhookID) error
 
 	// Circuit breaker operations
-	// CircuitBreaker returns the circuit breaker checker for this hot state
 	CircuitBreaker() CircuitBreakerChecker
 
 	// Stats
@@ -44,8 +50,8 @@ type HotState interface {
 	// Idempotency
 	CheckAndSetProcessed(ctx context.Context, webhookID domain.WebhookID, attempt int, ttl time.Duration) (bool, error)
 
-	// Script operations
-	GetScript(ctx context.Context, configID domain.ConfigID) (string, error) // Returns JSON-encoded ScriptConfig
+	// Script operations. GetScript returns a JSON-encoded ScriptConfig.
+	GetScript(ctx context.Context, configID domain.ConfigID) (string, error)
 	SetScript(ctx context.Context, configID domain.ConfigID, scriptJSON string, ttl time.Duration) error
 	DeleteScript(ctx context.Context, configID domain.ConfigID) error
 
@@ -54,58 +60,53 @@ type HotState interface {
 	FlushForRebuild(ctx context.Context) error
 	Close() error
 
-	// Redis client access for advanced operations
+	// Client exposes the underlying Redis client for operations not covered by this interface.
+	// Prefer adding methods here over direct client access.
 	Client() *redis.Client
 
 	// IncrInflight atomically increments the in-flight counter for an endpoint.
-	// Returns the new count after increment.
-	// The key has a TTL to auto-expire if workers crash (leak protection).
+	// The TTL auto-expires the key if the worker crashes, preventing counter leaks.
 	IncrInflight(ctx context.Context, endpointHash domain.EndpointHash, ttl time.Duration) (int64, error)
 
-	// DecrInflight atomically decrements the in-flight counter for an endpoint.
-	// Uses a Lua script to ensure the counter never goes below zero.
+	// DecrInflight atomically decrements the in-flight counter using a Lua script
+	// that floors the value at zero, preventing drift from edge cases like duplicate processing.
 	DecrInflight(ctx context.Context, endpointHash domain.EndpointHash) error
 
 	// SystemEpoch operations
-	// GetEpoch retrieves the system epoch marker from Redis
 	GetEpoch(ctx context.Context) (*domain.SystemEpoch, error)
-	// SetEpoch sets the system epoch marker in Redis
 	SetEpoch(ctx context.Context, epoch *domain.SystemEpoch) error
-	// GetRetryQueueSize returns the current size of the retry queue
 	GetRetryQueueSize(ctx context.Context) (int64, error)
 
 	// --- Zero Maintenance: Auto-Recovery (Sentinel Pattern) ---
 
-	// CheckCanary checks if the system canary key exists (indicates Redis is initialized)
 	CheckCanary(ctx context.Context) (bool, error)
 
-	// SetCanary sets the system canary key (mark Redis as initialized)
+	// SetCanary marks Redis as initialized. If this key is absent on startup,
+	// the reconciler knows Redis needs rebuilding from Kafka.
 	SetCanary(ctx context.Context) error
 
-	// WaitForCanary polls until the canary key appears or timeout
+	// WaitForCanary polls until the canary key appears or the timeout elapses.
+	// Returns false if the timeout is reached without the key appearing.
 	WaitForCanary(ctx context.Context, timeout time.Duration) bool
 
 	// AcquireReconcilerLock attempts to acquire a distributed lock for reconciliation.
 	// Returns true if lock acquired, and an unlock function to release it.
-	// The lock has a TTL and is automatically extended via heartbeat until unlock.
+	// The lock TTL is extended automatically via heartbeat until unlock is called.
 	AcquireReconcilerLock(ctx context.Context, ttl time.Duration) (bool, func())
 
-	// DelCanary removes the canary key (used during FlushForRebuild)
+	// DelCanary removes the canary key. Called by FlushForRebuild to signal that
+	// Redis state is being rebuilt and other instances should wait.
 	DelCanary(ctx context.Context) error
 }
 
 // CircuitBreakerChecker provides circuit breaker functionality
 type CircuitBreakerChecker interface {
-	// Get retrieves the current circuit state for an endpoint
 	Get(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error)
 
-	// ShouldAllow checks if a request should be allowed through
-	// Returns: allowed, isProbe, error
+	// ShouldAllow returns (allowed, isProbe, error). isProbe is true when the circuit is
+	// HALF_OPEN and this call is the single permitted probe request.
 	ShouldAllow(ctx context.Context, endpointHash domain.EndpointHash) (bool, bool, error)
 
-	// RecordSuccess records a successful delivery
 	RecordSuccess(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error)
-
-	// RecordFailure records a failed delivery
 	RecordFailure(ctx context.Context, endpointHash domain.EndpointHash) (*domain.CircuitBreaker, error)
 }

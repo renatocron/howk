@@ -120,7 +120,7 @@ func (s *Server) getStatus(c *gin.Context) {
 
 	c.JSON(http.StatusOK, StatusResponse{
 		WebhookID:      string(status.WebhookID),
-		State:          status.State,
+		State:          string(status.State),
 		Attempts:       status.Attempts,
 		LastAttemptAt:  status.LastAttemptAt,
 		LastStatusCode: status.LastStatusCode,

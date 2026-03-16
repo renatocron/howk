@@ -545,7 +545,7 @@ func (p *KafkaWebhookPublisher) PublishState(ctx context.Context, snapshot *doma
 
 	return p.publishGeneric(ctx, p.topics.State, string(snapshot.WebhookID), snapshot, map[string]string{
 		"config_id": string(snapshot.ConfigID),
-		"state":     snapshot.State,
+		"state":     string(snapshot.State),
 		"type":      "state",
 	})
 }

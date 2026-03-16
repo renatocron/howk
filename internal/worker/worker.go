@@ -32,7 +32,22 @@ type Worker struct {
 	scriptConsumer *script.ScriptConsumer
 }
 
-// NewWorker creates a new worker
+// WorkerOption is a functional option for configuring a Worker at construction time.
+// Using options eliminates fragile two-phase init patterns where callers must remember
+// to invoke setters before Run().
+type WorkerOption func(*Worker)
+
+// WithScriptConsumer injects a ScriptConsumer into the Worker at construction time.
+// This is the preferred way to wire up script synchronization; it avoids the
+// post-construction SetScriptConsumer call that could silently be forgotten.
+func WithScriptConsumer(consumer *script.ScriptConsumer) WorkerOption {
+	return func(w *Worker) {
+		w.scriptConsumer = consumer
+	}
+}
+
+// NewWorker creates a new worker. Pass functional options (e.g. WithScriptConsumer)
+// to configure optional dependencies at construction time.
 func NewWorker(
 	cfg *config.Config,
 	brk broker.Broker,
@@ -42,8 +57,9 @@ func NewWorker(
 	rs retry.Retrier,
 	se *script.Engine,
 	dl delivery.DomainLimiter,
+	opts ...WorkerOption,
 ) *Worker {
-	return &Worker{
+	w := &Worker{
 		config:        cfg,
 		broker:        brk,
 		publisher:     pub,
@@ -54,15 +70,14 @@ func NewWorker(
 		retry:         rs,
 		scriptEngine:  se,
 	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
 }
 
-// SetScriptConsumer sets the script consumer for the worker
-// This should be called before Run() if script synchronization is needed
-func (w *Worker) SetScriptConsumer(consumer *script.ScriptConsumer) {
-	w.scriptConsumer = consumer
-}
-
-// GetScriptConsumer returns the script consumer
+// GetScriptConsumer returns the script consumer. Used by the process owner for
+// graceful shutdown sequencing.
 func (w *Worker) GetScriptConsumer() *script.ScriptConsumer {
 	return w.scriptConsumer
 }
@@ -74,8 +89,10 @@ func (w *Worker) Run(ctx context.Context) error {
 	// Start script consumer if configured
 	if w.scriptConsumer != nil {
 		if err := w.scriptConsumer.Start(ctx); err != nil {
-			log.Error().Err(err).Msg("Failed to start script consumer")
+			log.Error().Err(err).Msg("Failed to start script consumer, continuing with lazy loading only")
 			// Continue anyway - scripts can still be loaded lazily from Redis
+		} else {
+			log.Info().Msg("Script consumer started - scripts will be synchronized from Kafka")
 		}
 	}
 
@@ -300,8 +317,11 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 			logger.Error().Err(err).Msg("Failed to publish result")
 		}
 
-		// Record stats
+		// Record stats for the fast lane; slow lane adds its own counter below
 		w.recordStats(ctx, "delivered", &webhook)
+		if isSlowLane {
+			w.recordStats(ctx, "slow_delivered", &webhook)
+		}
 
 		// Cleanup retry data on success (terminal state)
 		w.cleanupRetryData(ctx, &webhook)
@@ -440,7 +460,7 @@ func (w *Worker) scheduleRetryForCircuit(ctx context.Context, webhook *domain.We
 	return nil
 }
 
-func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, state string, result *domain.DeliveryResult) {
+func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, state domain.WebhookState, result *domain.DeliveryResult) {
 	now := time.Now()
 	status := &domain.WebhookStatus{
 		WebhookID:   webhook.ID,
@@ -476,7 +496,7 @@ func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, stat
 // publishStateSnapshot publishes the webhook state to the compacted Kafka topic.
 // Terminal states (delivered/exhausted) publish tombstones to remove from topic.
 // Failed states publish full snapshots to enable Redis reconstruction on restart.
-func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webhook, state string, status *domain.WebhookStatus) {
+func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webhook, state domain.WebhookState, status *domain.WebhookStatus) {
 	// Only publish for terminal or retryable-failed states
 	// Skip transient states (delivering, pending) to reduce churn
 	if state != domain.StateDelivered && state != domain.StateExhausted && state != domain.StateFailed {
@@ -494,7 +514,7 @@ func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webho
 		case domain.StateDelivered, domain.StateExhausted:
 			// Terminal state: Send tombstone to remove from compacted topic
 			if err := w.publisher.PublishStateTombstone(pubCtx, webhook.ID); err != nil {
-				log.Warn().Err(err).Str("webhook_id", string(webhook.ID)).Str("state", state).
+				log.Warn().Err(err).Str("webhook_id", string(webhook.ID)).Str("state", string(state)).
 					Msg("Failed to publish state tombstone")
 			}
 
@@ -627,7 +647,7 @@ func (w *Worker) handleScriptError(ctx context.Context, webhook *domain.Webhook,
 		dlqReason = domain.DLQReasonScriptMemoryLimit
 	case script.ScriptErrorModuleCrypto:
 		// Check if crypto key not found
-		if scriptError.Message == "crypto key not found" || scriptError.Cause != nil && scriptError.Cause.Error() == "key not found" {
+		if scriptError.Message == "crypto key not found" || (scriptError.Cause != nil && scriptError.Cause.Error() == "key not found") {
 			dlqReason = domain.DLQReasonCryptoKeyNotFound
 		} else {
 			dlqReason = domain.DLQReasonScriptRuntimeError

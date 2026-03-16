@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -43,20 +44,24 @@ func (s *Server) handleIncoming(c *gin.Context) {
 		}
 	}
 
-	// 3. Read body (raw bytes - any content type)
+	// 3. Read body (raw bytes - any content type), enforcing the size limit
+	// before reading to prevent unbounded memory allocation.
+	maxSize := s.config.MaxRequestSize
+	if maxSize > 0 {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSize)
+	}
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		// MaxBytesReader returns an error when the limit is exceeded.
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
 		return
 	}
 	defer c.Request.Body.Close()
-
-	// 4. Check for body size limit (use API max request size)
-	maxSize := s.config.MaxRequestSize
-	if maxSize > 0 && int64(len(body)) > maxSize {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
-		return
-	}
 
 	// 5. Collect HTTP headers to pass to script
 	headers := make(map[string]string)

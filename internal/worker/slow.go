@@ -2,14 +2,12 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
-	"github.com/howk/howk/internal/domain"
 )
 
 // SlowWorker consumes from howk.slow and processes at a rate-limited pace.
@@ -60,37 +58,16 @@ func (sw *SlowWorker) ProcessSlowMessageForTest(ctx context.Context, msg *broker
 }
 
 // processSlowMessage processes a message from the slow lane.
-// It wraps the standard processMessage but records slow_delivered stat on success.
+// Stat recording (including slow_delivered) is handled inside processMessage
+// when isSlowLane=true, so there is no need to parse the webhook here.
 func (sw *SlowWorker) processSlowMessage(ctx context.Context, msg *broker.Message) error {
-	// Parse webhook first to get metadata for logging
-	var webhook domain.Webhook
-	if err := json.Unmarshal(msg.Value, &webhook); err != nil {
-		log.Error().Err(err).Msg("Failed to unmarshal webhook in slow lane")
-		return nil // Don't retry malformed messages
-	}
-
-	logger := log.With().
-		Str("webhook_id", string(webhook.ID)).
-		Str("config_id", string(webhook.ConfigID)).
-		Str("endpoint_hash", string(webhook.EndpointHash)).
-		Int("attempt", webhook.Attempt).
-		Str("lane", "slow").
-		Logger()
-
-	// Process through the same logic as fast lane, but pass isSlowLane=true
+	// Process through the same logic as fast lane, but pass isSlowLane=true.
+	// processMessage handles slow_delivered stat recording on success.
 	// This prevents infinite loops: if still over threshold in slow lane,
 	// the message will be NACKed and retried via Kafka's consumer backoff.
 	err := sw.worker.processMessage(ctx, msg, true)
-
-	// Record slow_delivered stat on successful processing
-	// Note: processMessage returns nil on success or terminal failure (DLQ)
-	// We only record stats for successful deliveries, not for NACKed messages
-	if err == nil {
-		sw.worker.recordStats(ctx, "slow_delivered", &webhook)
-		logger.Debug().Msg("Slow lane delivery completed")
-	} else {
-		logger.Warn().Err(err).Msg("Slow lane delivery error (will retry via Kafka)")
+	if err != nil {
+		log.Warn().Err(err).Msg("Slow lane delivery error (will retry via Kafka)")
 	}
-
 	return err
 }
