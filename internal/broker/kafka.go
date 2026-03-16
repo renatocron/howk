@@ -84,6 +84,16 @@ func NewKafkaBroker(cfg config.KafkaConfig) (*KafkaBroker, error) {
 	}, nil
 }
 
+// NewKafkaBrokerForTest creates a KafkaBroker with injected mock dependencies.
+// Intended for use in unit tests only; never call from production code.
+func NewKafkaBrokerForTest(producer sarama.SyncProducer, client sarama.Client, cfg config.KafkaConfig) *KafkaBroker {
+	return &KafkaBroker{
+		config:   cfg,
+		producer: producer,
+		client:   client,
+	}
+}
+
 func compressionCodec(name string) sarama.CompressionCodec {
 	switch name {
 	case "gzip":
@@ -409,17 +419,22 @@ func (pp *partitionProcessor) offsetCommitter() {
 	<-pp.ctx.Done()
 }
 
-func (pp *partitionProcessor) processMessage(msg *sarama.ConsumerMessage) bool {
-	headers := make(map[string]string)
+// convertSaramaMessage converts a raw sarama consumer message into the broker's
+// Message type, mapping headers, key, and value. Extracted for unit-testability.
+func convertSaramaMessage(msg *sarama.ConsumerMessage) *Message {
+	headers := make(map[string]string, len(msg.Headers))
 	for _, h := range msg.Headers {
 		headers[string(h.Key)] = string(h.Value)
 	}
-
-	brokerMsg := &Message{
+	return &Message{
 		Key:     msg.Key,
 		Value:   msg.Value,
 		Headers: headers,
 	}
+}
+
+func (pp *partitionProcessor) processMessage(msg *sarama.ConsumerMessage) bool {
+	brokerMsg := convertSaramaMessage(msg)
 
 	if err := pp.handler(pp.session.Context(), brokerMsg); err != nil {
 		log.Error().Err(err).

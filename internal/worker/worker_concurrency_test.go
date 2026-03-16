@@ -24,6 +24,7 @@ import (
 
 // setupWorkerWithMocks creates a worker with mock dependencies for concurrency testing
 func setupWorkerWithMocks(t *testing.T) (*worker.Worker, *MockPublisher, *MockHotState, *mocks.MockCircuitBreaker, *MockDeliveryClient, *MockRetryStrategy) {
+	t.Helper()
 	cfg := config.DefaultConfig()
 
 	mockBroker := new(MockBroker)

@@ -20,6 +20,7 @@ import (
 )
 
 func setupTestServer(t *testing.T) (*Server, *mocks.MockWebhookPublisher, *mocks.MockHotState, *mocks.MockValidator, *mocks.MockPublisher) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	mockPub := new(mocks.MockWebhookPublisher)
