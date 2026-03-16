@@ -22,7 +22,7 @@ func TestEngine_Execute_BinaryPayload(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode:  "request.body = payload",
 		Hash:     "binary_test",
@@ -56,7 +56,7 @@ func TestEngine_Execute_BinaryPayload_Transform(t *testing.T) {
 
 	loader := NewLoader()
 	// Lua 5.1 does not support \xNN escapes in strings, use string.char instead
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode:  "request.body = payload .. string.char(0, 1, 2, 3)",
 		Hash:     "binary_transform_test",
@@ -88,7 +88,7 @@ func TestEngine_Execute_BinaryPayload_WithNullBytes(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode:  "request.body = payload",
 		Hash:     "null_byte_test",
@@ -130,7 +130,7 @@ func TestEngine_Execute_BinaryPayload_Base64RoundTrip(t *testing.T) {
 		local encoded = base64.encode(payload)
 		request.body = base64.decode(encoded)
 	`
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode:  luaCode,
 		Hash:     "base64_roundtrip_test",
@@ -167,7 +167,7 @@ func TestEngine_Execute_BinaryPayload_ImageData(t *testing.T) {
 		request.body = payload
 		headers["X-Payload-Size"] = tostring(#payload)
 	`
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode:  luaCode,
 		Hash:     "image_data_test",
@@ -231,7 +231,7 @@ func TestEngine_Execute_Base64ImageInJSON(t *testing.T) {
 		-- Disable default webhook headers since we're sending raw image
 		config.opt_out_default_headers = true
 	`
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "image_processor",
 		LuaCode:  luaCode,
 		Hash:     "image_processor_v1",

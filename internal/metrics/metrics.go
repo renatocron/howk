@@ -38,11 +38,19 @@ var (
 	})
 )
 
-func init() {
-	prometheus.MustRegister(WebhooksReceived)
-	prometheus.MustRegister(DeliveriesTotal)
-	prometheus.MustRegister(DeliveryDuration)
-	prometheus.MustRegister(RetryQueueDepth)
+// Register registers all HOWK metrics collectors with reg. If reg is nil,
+// prometheus.DefaultRegisterer is used. Callers should invoke Register once at
+// process startup before recording any observations. Unlike the former init()
+// approach, this allows test code to pass a fresh prometheus.NewRegistry() and
+// avoid duplicate-registration panics when multiple tests import this package.
+func Register(reg prometheus.Registerer) {
+	if reg == nil {
+		reg = prometheus.DefaultRegisterer
+	}
+	reg.MustRegister(WebhooksReceived)
+	reg.MustRegister(DeliveriesTotal)
+	reg.MustRegister(DeliveryDuration)
+	reg.MustRegister(RetryQueueDepth)
 }
 
 // ListenAndServe starts a Prometheus /metrics HTTP server on the given port.

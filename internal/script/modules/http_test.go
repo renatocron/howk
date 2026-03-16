@@ -543,3 +543,71 @@ return resp, err
 	assert.Equal(t, lua.LNil, result)
 	assert.Contains(t, errMsg.String(), "host validation failed")
 }
+
+// TestCacheEntry_PerEntryTTL verifies that the per-entry TTL stored at write
+// time is used for expiry, not the module-level cacheTTL.  This is the fix for
+// the TTL mismatch described in issue 3: setCached accepted a per-request TTL
+// but getCached was checking h.cacheTTL, so a short per-request TTL had no effect.
+func TestCacheEntry_PerEntryTTL(t *testing.T) {
+	// Set a long global TTL so it would never expire entries on its own.
+	longGlobal := 10 * time.Minute
+
+	// Create an entry with a very short per-entry TTL.
+	entry := &cacheEntry{
+		response: &HTTPResponse{StatusCode: 200, Body: "cached"},
+		cachedAt: time.Now().Add(-2 * time.Second), // written 2 s ago
+		ttl:      1 * time.Second,                  // per-entry TTL: expired
+	}
+
+	// Build a minimal HTTPModule with the long global TTL.
+	hm := &HTTPModule{
+		cacheTTL:     longGlobal,
+		cacheEnabled: true,
+		cache:        map[string]*cacheEntry{"key1": entry},
+	}
+
+	// getCached should return nil because the per-entry TTL (1 s) has elapsed,
+	// even though the global TTL (10 min) has not.
+	result := hm.getCached("key1")
+	assert.Nil(t, result, "entry should be expired by its per-entry TTL")
+
+	// Now test the opposite: per-entry TTL longer than the elapsed time.
+	fresh := &cacheEntry{
+		response: &HTTPResponse{StatusCode: 200, Body: "fresh"},
+		cachedAt: time.Now().Add(-100 * time.Millisecond),
+		ttl:      5 * time.Second,
+	}
+	hm.cache["key2"] = fresh
+	result2 := hm.getCached("key2")
+	assert.NotNil(t, result2, "entry should still be valid within its per-entry TTL")
+	assert.Equal(t, "fresh", result2.Body)
+}
+
+// TestCacheEntry_CleanupUsesPerEntryTTL verifies that cleanupExpired removes
+// only entries whose per-entry TTL has elapsed.
+func TestCacheEntry_CleanupUsesPerEntryTTL(t *testing.T) {
+	hm := &HTTPModule{
+		cacheTTL:     10 * time.Minute, // long global — should not drive cleanup
+		cacheEnabled: true,
+		cache: map[string]*cacheEntry{
+			"expired": {
+				response: &HTTPResponse{Body: "old"},
+				cachedAt: time.Now().Add(-5 * time.Second),
+				ttl:      1 * time.Second, // expired
+			},
+			"valid": {
+				response: &HTTPResponse{Body: "new"},
+				cachedAt: time.Now().Add(-500 * time.Millisecond),
+				ttl:      5 * time.Second, // still valid
+			},
+		},
+	}
+
+	// cleanupExpired requires the write lock to be held by the caller.
+	hm.cacheMu.Lock()
+	hm.cleanupExpired()
+	hm.cacheMu.Unlock()
+
+	assert.NotContains(t, hm.cache, "expired", "expired entry should be removed")
+	assert.Contains(t, hm.cache, "valid", "valid entry should be retained")
+}

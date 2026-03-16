@@ -18,7 +18,7 @@ func TestEngine_Execute_SimpleHeaderTransform(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode:  `headers["X-Custom"] = "test_value"`,
 		Hash:     "abc123",
@@ -50,7 +50,7 @@ func TestEngine_Execute_JSONTransform(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode: `
 			local json = require("json")
@@ -97,7 +97,7 @@ func TestEngine_Execute_Base64(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode: `
 			local base64 = require("base64")
@@ -140,7 +140,7 @@ func TestEngine_Execute_MetadataAccess(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode: `
 			headers["X-Webhook-ID"] = metadata.webhook_id
@@ -216,7 +216,7 @@ func TestEngine_Execute_Disabled(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode:  `headers["X-Test"] = "value"`,
 		Hash:     "xyz",
@@ -252,7 +252,7 @@ func TestEngine_Execute_Timeout(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode: `
 			-- Infinite loop to trigger timeout
@@ -293,7 +293,7 @@ func TestEngine_Execute_RuntimeError(t *testing.T) {
 	}
 
 	loader := NewLoader()
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "test_config",
 		LuaCode:  `error("intentional error")`,
 		Hash:     "error_test",

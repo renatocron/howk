@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/oklog/ulid/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -25,8 +24,8 @@ type Server struct {
 	config              config.APIConfig
 	publisher           broker.WebhookPublisher
 	hotstate            hotstate.HotState
-	scriptValidator     script.ValidatorInterface
-	scriptPublisher     script.PublisherInterface
+	scriptValidator     script.SyntaxChecker
+	scriptPublisher     script.ScriptPublisher
 	transformerRegistry *transformer.Registry
 	transformerEngine   *transformer.Engine
 	router              *gin.Engine
@@ -41,8 +40,8 @@ func NewServer(
 	cfg config.APIConfig,
 	pub broker.WebhookPublisher,
 	hs hotstate.HotState,
-	scriptValidator script.ValidatorInterface,
-	scriptPublisher script.PublisherInterface,
+	scriptValidator script.SyntaxChecker,
+	scriptPublisher script.ScriptPublisher,
 	opts ...ServerOption,
 ) *Server {
 	gin.SetMode(gin.ReleaseMode)
@@ -80,15 +79,15 @@ func WithTransformers(reg *transformer.Registry, eng *transformer.Engine) Server
 func (s *Server) setupRoutes() {
 	// Health endpoints
 	s.router.GET("/health", s.handleHealth)
-	s.router.GET("/ready", s.readyCheck)
-	s.router.GET("/health/dependencies", s.dependenciesCheck)
+	s.router.GET("/ready", s.handleReadyCheck)
+	s.router.GET("/health/dependencies", s.handleDependenciesCheck)
 
 	// Webhook endpoints
 	webhooks := s.router.Group("/webhooks")
 	{
-		webhooks.POST("/:config/enqueue", s.enqueueWebhook)
-		webhooks.POST("/:config/enqueue/batch", s.enqueueWebhookBatch)
-		webhooks.GET("/:webhook_id/status", s.getStatus)
+		webhooks.POST("/:config/enqueue", s.handleEnqueueWebhook)
+		webhooks.POST("/:config/enqueue/batch", s.handleEnqueueWebhookBatch)
+		webhooks.GET("/:webhook_id/status", s.handleGetStatus)
 	}
 
 	// Script endpoints
@@ -101,7 +100,7 @@ func (s *Server) setupRoutes() {
 	}
 
 	// Stats endpoint
-	s.router.GET("/stats", s.getStats)
+	s.router.GET("/stats", s.handleGetStats)
 
 	// Transformer endpoint (only if transformer feature is enabled)
 	if s.transformerRegistry != nil {
@@ -183,7 +182,7 @@ type StatsResponse struct {
 
 // --- Handlers ---
 
-func (s *Server) readyCheck(c *gin.Context) {
+func (s *Server) handleReadyCheck(c *gin.Context) {
 	// Check Redis connectivity
 	if err := s.hotstate.Ping(c.Request.Context()); err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not ready", "error": "redis unavailable"})
@@ -192,7 +191,7 @@ func (s *Server) readyCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ready"})
 }
 
-func (s *Server) getStats(c *gin.Context) {
+func (s *Server) handleGetStats(c *gin.Context) {
 	now := time.Now()
 
 	// Last 1 hour
@@ -218,32 +217,23 @@ func (s *Server) getStats(c *gin.Context) {
 }
 
 func (s *Server) buildWebhook(configID domain.ConfigID, req *EnqueueRequest) *domain.Webhook {
-	maxAttempts := req.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = 20 // Default
-	}
-
-	webhook := &domain.Webhook{
-		ID:             domain.WebhookID("wh_" + ulid.Make().String()),
+	webhook := domain.NewWebhook(domain.NewWebhookOpts{
 		ConfigID:       configID,
 		Endpoint:       req.Endpoint,
-		EndpointHash:   domain.HashEndpoint(req.Endpoint),
 		Payload:        req.Payload,
 		Headers:        req.Headers,
 		IdempotencyKey: req.IdempotencyKey,
 		SigningSecret:  req.SigningSecret,
-		Attempt:        0,
-		MaxAttempts:    maxAttempts,
-		CreatedAt:      time.Now(),
-		ScheduledAt:    time.Now(),
-	}
+		MaxAttempts:    req.MaxAttempts,
+	})
 
-	// Check if script exists for this config_id and set ScriptHash
+	// Attach script hash when a Lua transformer is registered for this config_id.
+	// Done at enqueue time so the worker can detect transformation intent without
+	// hitting Redis again.
 	ctx := context.Background()
 	scriptJSON, err := s.hotstate.GetScript(ctx, configID)
 	if err == nil && scriptJSON != "" {
-		// Parse script to get hash
-		var scriptConfig script.ScriptConfig
+		var scriptConfig script.Config
 		if err := json.Unmarshal([]byte(scriptJSON), &scriptConfig); err == nil {
 			webhook.ScriptHash = scriptConfig.Hash
 			log.Debug().

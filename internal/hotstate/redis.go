@@ -34,8 +34,22 @@ const (
 // ErrScriptNotFound is returned when a script is not found in Redis.
 var ErrScriptNotFound = errors.New("script not found")
 
-// Compile-time interface assertion.
-var _ HotState = (*RedisHotState)(nil)
+// Compile-time interface assertions — verify RedisHotState satisfies every sub-interface
+// and the composite HotState. If any method is missing the build fails here, not at a
+// distant call site.
+var (
+	_ HotState           = (*RedisHotState)(nil)
+	_ StatusStore        = (*RedisHotState)(nil)
+	_ RetryStore         = (*RedisHotState)(nil)
+	_ CircuitBreakerStore = (*RedisHotState)(nil)
+	_ StatsStore         = (*RedisHotState)(nil)
+	_ IdempotencyStore   = (*RedisHotState)(nil)
+	_ InflightStore      = (*RedisHotState)(nil)
+	_ EpochStore         = (*RedisHotState)(nil)
+	_ CanaryStore        = (*RedisHotState)(nil)
+	_ ScriptStore        = (*RedisHotState)(nil)
+	_ AdminOps           = (*RedisHotState)(nil)
+)
 
 // RedisHotState implements HotState using Redis
 type RedisHotState struct {

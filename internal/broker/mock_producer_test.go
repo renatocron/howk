@@ -300,7 +300,7 @@ func TestPublisher_PublishState_TopicAndHeaders(t *testing.T) {
 
 	h := headersMap(msg)
 	assert.Equal(t, "cfg-state", h["config_id"])
-	assert.Equal(t, domain.StatePending, h["state"])
+	assert.Equal(t, string(domain.StatePending), h["state"])
 	assert.Equal(t, "state", h["type"])
 }
 

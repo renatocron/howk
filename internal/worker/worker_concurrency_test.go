@@ -50,10 +50,10 @@ func setupWorkerWithMocks(t *testing.T) (*worker.Worker, *MockPublisher, *MockHo
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	return w, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy
@@ -117,7 +117,7 @@ func TestProcessMessage_ProceedsWhenUnderThreshold(t *testing.T) {
 
 	// Stats recording - accept any calls
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// DECR should be called on exit
@@ -171,7 +171,7 @@ func TestProcessMessage_FailOpenOnRedisError(t *testing.T) {
 
 	// Stats recording
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// DECR should NOT be called when IncrInflight failed (no slot was acquired)
@@ -224,7 +224,7 @@ func TestProcessMessage_DecrCalledOnSuccess(t *testing.T) {
 
 	// Stats recording
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// DECR must be called exactly once on success
@@ -288,7 +288,7 @@ func TestProcessMessage_DecrCalledOnFailure(t *testing.T) {
 
 	// Stats recording
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// DECR must be called exactly once even on failure
@@ -346,7 +346,7 @@ func TestProcessMessage_DecrCalledOnDLQ(t *testing.T) {
 
 	// Stats recording
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// DECR must be called exactly once even on DLQ
@@ -389,7 +389,7 @@ func TestProcessMessage_NoDECRWhenDiverted(t *testing.T) {
 
 	// Stats recording
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// Process the message
@@ -447,7 +447,7 @@ func TestProcessMessage_DivertFailsProceedsWithDelivery(t *testing.T) {
 
 	// Stats recording
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil)
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// DECR should be called at the end (from defer)

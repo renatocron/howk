@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestExtractNamespace(t *testing.T) {
+func TestExtractNamespace_exported(t *testing.T) {
 	tests := []struct {
 		configID  string
 		expected  string
@@ -19,9 +19,9 @@ func TestExtractNamespace(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := extractNamespace(tt.configID)
+		result := ExtractNamespace(tt.configID)
 		if result != tt.expected {
-			t.Errorf("extractNamespace(%q) = %q, want %q", tt.configID, result, tt.expected)
+			t.Errorf("ExtractNamespace(%q) = %q, want %q", tt.configID, result, tt.expected)
 		}
 	}
 }

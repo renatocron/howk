@@ -7,12 +7,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/api"
+	"github.com/howk/howk/internal/app"
 	"github.com/howk/howk/internal/broker"
-	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/metrics"
 	"github.com/howk/howk/internal/script"
@@ -25,27 +24,23 @@ func main() {
 	configPath := flag.String("config", "", "Path to config file (optional)")
 	flag.Parse()
 
-	// Setup logging
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-
-	// Determine config path: flag > env var > empty (uses defaults)
-	cfgPath := *configPath
-	if cfgPath == "" {
-		cfgPath = os.Getenv("HOWK_CONFIG")
-	}
-
-	// Load config
-	cfg, err := config.LoadConfig(cfgPath)
+	// Bootstrap: logging + config (also checks HOWK_CONFIG env var)
+	cfg, err := app.Bootstrap(*configPath)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load configuration")
 	}
+
+	// Register Prometheus metrics with the default global registry.
+	// This is done explicitly (rather than via init()) so test binaries can
+	// supply a fresh registry and avoid duplicate-registration panics.
+	metrics.Register(nil)
 
 	// Setup context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle shutdown signals
+	// Register for all signals we care about. SIGHUP triggers transformer
+	// hot-reload; SIGINT/SIGTERM trigger graceful shutdown.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -136,7 +131,6 @@ func main() {
 	// Create and run API server
 	server := api.NewServer(cfg.API, publisher, hs, scriptValidator, scriptPublisher, serverOpts...)
 
-	// Run server
 	go func() {
 		if err := server.Run(ctx); err != nil {
 			log.Error().Err(err).Msg("API server error")
@@ -144,12 +138,12 @@ func main() {
 		}
 	}()
 
-	// Wait for shutdown signal
+	// Wait for shutdown signal. SIGHUP triggers transformer hot-reload without
+	// stopping the server; SIGINT/SIGTERM cancel the context to initiate shutdown.
 	for {
 		sig := <-sigCh
 		switch sig {
 		case syscall.SIGHUP:
-			// Hot reload transformer scripts
 			if transformerRegistry != nil {
 				log.Info().Msg("Received SIGHUP, reloading transformer scripts")
 				if err := transformerRegistry.Reload(); err != nil {

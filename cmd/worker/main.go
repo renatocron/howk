@@ -1,18 +1,13 @@
 package main
 
 import (
-	"context"
 	"flag"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/howk/howk/internal/app"
 	"github.com/howk/howk/internal/broker"
-	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/metrics"
@@ -27,29 +22,19 @@ func main() {
 	configPath := flag.String("config", "", "Path to config file (optional)")
 	flag.Parse()
 
-	// Setup logging
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-
-	// Determine config path: flag > env var > empty (uses defaults)
-	cfgPath := *configPath
-	if cfgPath == "" {
-		cfgPath = os.Getenv("HOWK_CONFIG")
-	}
-
-	// Load config
-	cfg, err := config.LoadConfig(cfgPath)
+	// Bootstrap: logging + config (also checks HOWK_CONFIG env var)
+	cfg, err := app.Bootstrap(*configPath)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load configuration")
 	}
 
-	// Setup context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Register Prometheus metrics with the default global registry.
+	// Explicit registration avoids duplicate-registration panics in tests.
+	metrics.Register(nil)
 
-	// Handle shutdown signals
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// Setup context and signal handler
+	ctx, cancel := app.SetupSignalHandler()
+	defer cancel()
 
 	// Initialize Kafka broker
 	kafkaBroker, err := broker.NewKafkaBroker(cfg.Kafka)
@@ -134,32 +119,28 @@ func main() {
 		go metrics.ListenAndServe(ctx, cfg.Metrics.Port)
 	}
 
-	// Create worker
-	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, dc, rs, scriptEngine, domainLimiter)
-
-	// Initialize and start script consumer if Lua is enabled
-	// This ensures the worker has scripts even if Redis is flushed
+	// Build worker options. All optional dependencies are injected via options so
+	// that the NewWorker signature remains self-documenting at the call site.
+	workerOpts := []worker.WorkerOption{
+		worker.WithDeliveryClient(dc),
+		worker.WithRetryStrategy(rs),
+		worker.WithScriptEngine(scriptEngine),
+		worker.WithDomainLimiter(domainLimiter),
+	}
 	if cfg.Lua.Enabled {
-		scriptConsumer := script.NewScriptConsumer(
+		scriptConsumer := script.NewConsumer(
 			kafkaBroker,
 			scriptLoader,
 			hs,
 			cfg.Kafka.Topics.Scripts,
 			cfg.Kafka.ConsumerGroup+"-scripts", // Separate consumer group for scripts
-			24*time.Hour,                      // Script cache TTL
+			24*time.Hour,                       // Script cache TTL
 		)
-		w.SetScriptConsumer(scriptConsumer)
-
-		// Start script consumer in background
-		if err := scriptConsumer.Start(ctx); err != nil {
-			log.Error().Err(err).Msg("Failed to start script consumer, continuing with lazy loading only")
-		} else {
-			log.Info().
-				Str("topic", cfg.Kafka.Topics.Scripts).
-				Str("consumer_group", cfg.Kafka.ConsumerGroup+"-scripts").
-				Msg("Script consumer started - scripts will be synchronized from Kafka")
-		}
+		workerOpts = append(workerOpts, worker.WithScriptConsumer(scriptConsumer))
 	}
+
+	// Create worker with all dependencies resolved at construction time
+	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, workerOpts...)
 
 	// Run worker
 	go func() {
@@ -178,9 +159,7 @@ func main() {
 	}()
 
 	// Wait for shutdown signal
-	<-sigCh
-	log.Info().Msg("Shutdown signal received")
-	cancel()
+	<-ctx.Done()
 
 	// Stop script consumer gracefully
 	if w.GetScriptConsumer() != nil {

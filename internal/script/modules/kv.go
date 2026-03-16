@@ -21,7 +21,7 @@ type KVModule struct {
 // The namespace is extracted from config_id by taking the part before the first ":"
 // e.g., "music:10" -> namespace "music", keys stored as "kv:music:{key}"
 func NewKVModule(client *redis.Client, configID string) *KVModule {
-	namespace := extractNamespace(configID)
+	namespace := ExtractNamespace(configID)
 	return &KVModule{
 		client:    client,
 		configID:  configID,
@@ -29,10 +29,11 @@ func NewKVModule(client *redis.Client, configID string) *KVModule {
 	}
 }
 
-// extractNamespace extracts the namespace from config_id
-// If config_id contains ":", takes the part before the first ":"
-// Otherwise, uses the entire config_id
-func extractNamespace(configID string) string {
+// ExtractNamespace extracts the namespace from a config_id.
+// If config_id contains ":", takes the part before the first ":".
+// Otherwise, uses the entire config_id.
+// e.g., "music:10" -> "music", "simple" -> "simple"
+func ExtractNamespace(configID string) string {
 	if idx := strings.Index(configID, ":"); idx != -1 {
 		return configID[:idx]
 	}

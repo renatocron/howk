@@ -20,9 +20,9 @@ type ScriptStore interface {
 	DeleteScript(ctx context.Context, configID domain.ConfigID) error
 }
 
-// ScriptConsumer consumes script configurations from Kafka and maintains a local cache
+// Consumer consumes script configurations from Kafka and maintains a local cache
 // This ensures the Worker has scripts even if Redis is flushed
-type ScriptConsumer struct {
+type Consumer struct {
 	broker    broker.Broker
 	loader    *Loader
 	hotstate  ScriptStore
@@ -36,12 +36,12 @@ type ScriptConsumer struct {
 	wg        sync.WaitGroup
 }
 
-// NewScriptConsumer creates a new script consumer
-func NewScriptConsumer(brk broker.Broker, loader *Loader, hs ScriptStore, topic, group string, cacheTTL time.Duration) *ScriptConsumer {
+// NewConsumer creates a new script consumer
+func NewConsumer(brk broker.Broker, loader *Loader, hs ScriptStore, topic, group string, cacheTTL time.Duration) *Consumer {
 	if cacheTTL == 0 {
 		cacheTTL = 24 * time.Hour // Default TTL
 	}
-	return &ScriptConsumer{
+	return &Consumer{
 		broker:   brk,
 		loader:   loader,
 		hotstate: hs,
@@ -53,7 +53,7 @@ func NewScriptConsumer(brk broker.Broker, loader *Loader, hs ScriptStore, topic,
 }
 
 // Start begins consuming scripts from Kafka in a background goroutine
-func (c *ScriptConsumer) Start(ctx context.Context) error {
+func (c *Consumer) Start(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -75,7 +75,7 @@ func (c *ScriptConsumer) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the script consumer
-func (c *ScriptConsumer) Stop() error {
+func (c *Consumer) Stop() error {
 	c.mu.Lock()
 	if !c.running {
 		c.mu.Unlock()
@@ -103,7 +103,7 @@ func (c *ScriptConsumer) Stop() error {
 }
 
 // run is the main consumer loop
-func (c *ScriptConsumer) run(ctx context.Context) {
+func (c *Consumer) run(ctx context.Context) {
 	defer c.wg.Done()
 
 	for {
@@ -128,7 +128,7 @@ func (c *ScriptConsumer) run(ctx context.Context) {
 }
 
 // handleMessage processes a single script message
-func (c *ScriptConsumer) handleMessage(ctx context.Context, msg *broker.Message) error {
+func (c *Consumer) handleMessage(ctx context.Context, msg *broker.Message) error {
 	configID := string(msg.Key)
 
 	// Tombstone message (null value) - delete the script
@@ -149,7 +149,7 @@ func (c *ScriptConsumer) handleMessage(ctx context.Context, msg *broker.Message)
 	}
 
 	// Parse script configuration
-	var script ScriptConfig
+	var script Config
 	if err := json.Unmarshal(msg.Value, &script); err != nil {
 		log.Error().Err(err).Str("config_id", configID).Msg("Failed to unmarshal script config")
 		return fmt.Errorf("unmarshal script config: %w", err)
@@ -190,7 +190,7 @@ func (c *ScriptConsumer) handleMessage(ctx context.Context, msg *broker.Message)
 }
 
 // IsRunning returns whether the consumer is currently running
-func (c *ScriptConsumer) IsRunning() bool {
+func (c *Consumer) IsRunning() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.running
@@ -198,7 +198,7 @@ func (c *ScriptConsumer) IsRunning() bool {
 
 // PrefetchScripts loads all scripts from Redis into the loader cache
 // This should be called on startup before starting the consumer
-func (c *ScriptConsumer) PrefetchScripts(ctx context.Context) error {
+func (c *Consumer) PrefetchScripts(ctx context.Context) error {
 	// This would require a method to list all scripts in Redis
 	// For now, scripts are loaded lazily when webhooks are processed
 	// The reconciler can be used to rebuild script state from Kafka if needed

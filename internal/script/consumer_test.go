@@ -63,12 +63,12 @@ func (m *MockBrokerForConsumer) TriggerMessage(ctx context.Context, msg *broker.
 	return errors.New("no handler registered")
 }
 
-func TestScriptConsumer_NewScriptConsumer(t *testing.T) {
+func TestConsumer_NewConsumer(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -81,12 +81,12 @@ func TestScriptConsumer_NewScriptConsumer(t *testing.T) {
 	assert.False(t, consumer.IsRunning())
 }
 
-func TestScriptConsumer_StartStop(t *testing.T) {
+func TestConsumer_StartStop(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -118,12 +118,12 @@ func TestScriptConsumer_StartStop(t *testing.T) {
 	mockBroker.AssertExpectations(t)
 }
 
-func TestScriptConsumer_HandleMessage_CreateScript(t *testing.T) {
+func TestConsumer_HandleMessage_CreateScript(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -133,7 +133,7 @@ func TestScriptConsumer_HandleMessage_CreateScript(t *testing.T) {
 	)
 
 	// Create a script config
-	script := ScriptConfig{
+	script := Config{
 		ConfigID:  "test-config",
 		LuaCode:   `headers["X-Test"] = "value"`,
 		Hash:      "abc123",
@@ -171,12 +171,12 @@ func TestScriptConsumer_HandleMessage_CreateScript(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestScriptConsumer_HandleMessage_DeleteScript(t *testing.T) {
+func TestConsumer_HandleMessage_DeleteScript(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -186,7 +186,7 @@ func TestScriptConsumer_HandleMessage_DeleteScript(t *testing.T) {
 	)
 
 	// First add a script
-	script := ScriptConfig{
+	script := Config{
 		ConfigID: "test-config",
 		LuaCode:  `headers["X-Test"] = "value"`,
 		Hash:     "abc123",
@@ -220,12 +220,12 @@ func TestScriptConsumer_HandleMessage_DeleteScript(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestScriptConsumer_HandleMessage_InvalidJSON(t *testing.T) {
+func TestConsumer_HandleMessage_InvalidJSON(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -247,12 +247,12 @@ func TestScriptConsumer_HandleMessage_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "unmarshal")
 }
 
-func TestScriptConsumer_HandleMessage_MissingConfigID(t *testing.T) {
+func TestConsumer_HandleMessage_MissingConfigID(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -262,7 +262,7 @@ func TestScriptConsumer_HandleMessage_MissingConfigID(t *testing.T) {
 	)
 
 	// Create script config without ConfigID
-	script := ScriptConfig{
+	script := Config{
 		ConfigID: "", // Empty ConfigID
 		LuaCode:  `headers["X-Test"] = "value"`,
 		Hash:     "abc123",
@@ -282,12 +282,12 @@ func TestScriptConsumer_HandleMessage_MissingConfigID(t *testing.T) {
 	assert.Contains(t, err.Error(), "ConfigID")
 }
 
-func TestScriptConsumer_HandleMessage_MissingLuaCode(t *testing.T) {
+func TestConsumer_HandleMessage_MissingLuaCode(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -297,7 +297,7 @@ func TestScriptConsumer_HandleMessage_MissingLuaCode(t *testing.T) {
 	)
 
 	// Create script config without LuaCode
-	script := ScriptConfig{
+	script := Config{
 		ConfigID: "test-config",
 		LuaCode:  "", // Empty LuaCode
 		Hash:     "abc123",
@@ -317,12 +317,12 @@ func TestScriptConsumer_HandleMessage_MissingLuaCode(t *testing.T) {
 	assert.Contains(t, err.Error(), "LuaCode")
 }
 
-func TestScriptConsumer_HandleMessage_RedisStoreError(t *testing.T) {
+func TestConsumer_HandleMessage_RedisStoreError(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -332,7 +332,7 @@ func TestScriptConsumer_HandleMessage_RedisStoreError(t *testing.T) {
 	)
 
 	// Create a script config
-	script := ScriptConfig{
+	script := Config{
 		ConfigID:  "test-config",
 		LuaCode:   `headers["X-Test"] = "value"`,
 		Hash:      "abc123",
@@ -365,12 +365,12 @@ func TestScriptConsumer_HandleMessage_RedisStoreError(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestScriptConsumer_Start_AlreadyRunning(t *testing.T) {
+func TestConsumer_Start_AlreadyRunning(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,
@@ -402,12 +402,12 @@ func TestScriptConsumer_Start_AlreadyRunning(t *testing.T) {
 	consumer.Stop()
 }
 
-func TestScriptConsumer_Stop_NotRunning(t *testing.T) {
+func TestConsumer_Stop_NotRunning(t *testing.T) {
 	mockBroker := new(MockBrokerForConsumer)
 	loader := NewLoader()
 	mockStore := new(MockScriptStore)
 
-	consumer := NewScriptConsumer(
+	consumer := NewConsumer(
 		mockBroker,
 		loader,
 		mockStore,

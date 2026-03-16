@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"time"
+
+	"github.com/oklog/ulid/v2"
 )
 
 // WebhookID is a ULID-based unique identifier
@@ -58,26 +61,30 @@ type DeliveryResult struct {
 	Webhook *Webhook `json:"webhook,omitempty"`
 }
 
+// WebhookState represents the delivery lifecycle state of a webhook.
+// It mirrors the CircuitState pattern for type-safe state comparisons.
+type WebhookState string
+
 // WebhookStatus represents the current state of a webhook
 type WebhookStatus struct {
-	WebhookID      WebhookID  `json:"webhook_id"`
-	State          string     `json:"state"` // pending, delivering, delivered, failed, exhausted
-	Attempts       int        `json:"attempts"`
-	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
-	LastStatusCode int        `json:"last_status_code,omitempty"`
-	LastError      string     `json:"last_error,omitempty"`
-	NextRetryAt    *time.Time `json:"next_retry_at,omitempty"`
-	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
-	UpdatedAtNs    int64      `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
+	WebhookID      WebhookID    `json:"webhook_id"`
+	State          WebhookState `json:"state"`
+	Attempts       int          `json:"attempts"`
+	LastAttemptAt  *time.Time   `json:"last_attempt_at,omitempty"`
+	LastStatusCode int          `json:"last_status_code,omitempty"`
+	LastError      string       `json:"last_error,omitempty"`
+	NextRetryAt    *time.Time   `json:"next_retry_at,omitempty"`
+	DeliveredAt    *time.Time   `json:"delivered_at,omitempty"`
+	UpdatedAtNs    int64        `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
 }
 
-// State constants
+// WebhookState constants representing the delivery lifecycle.
 const (
-	StatePending    = "pending"
-	StateDelivering = "delivering"
-	StateDelivered  = "delivered"
-	StateFailed     = "failed"
-	StateExhausted  = "exhausted"
+	StatePending    WebhookState = "pending"
+	StateDelivering WebhookState = "delivering"
+	StateDelivered  WebhookState = "delivered"
+	StateFailed     WebhookState = "failed"
+	StateExhausted  WebhookState = "exhausted"
 )
 
 // CircuitState represents the circuit breaker state
@@ -115,6 +122,73 @@ type Stats struct {
 func HashEndpoint(endpoint string) EndpointHash {
 	h := sha256.Sum256([]byte(endpoint))
 	return EndpointHash(hex.EncodeToString(h[:16])) // 32 chars
+}
+
+// MatchesDomain reports whether hostname matches pattern using the same rules
+// applied by both the HTTP module allowlist and the transformer domain list:
+//
+//   - "*"            — matches any hostname (global wildcard)
+//   - "*.example.com" — matches any subdomain of example.com, case-insensitive
+//   - "api.example.com" — exact match, case-insensitive
+//
+// This is the single canonical implementation; callers in internal/script/modules
+// and internal/transformer delegate here to keep the matching behaviour identical.
+func MatchesDomain(hostname, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*.") {
+		// Remove the leading "*", keep the dot so we match ".example.com".
+		suffix := pattern[1:]
+		return strings.EqualFold(hostname, pattern[2:]) ||
+			strings.HasSuffix(strings.ToLower(hostname), strings.ToLower(suffix))
+	}
+	return strings.EqualFold(hostname, pattern)
+}
+
+// defaultMaxAttempts is the retry budget applied when callers pass MaxAttempts <= 0.
+const defaultMaxAttempts = 20
+
+// NewWebhookOpts carries the caller-supplied fields for NewWebhook.
+// Zero values produce sensible defaults: MaxAttempts → 20, Attempt → 0,
+// CreatedAt/ScheduledAt → time.Now().
+type NewWebhookOpts struct {
+	ConfigID       ConfigID
+	Endpoint       string
+	Payload        json.RawMessage
+	Headers        map[string]string
+	IdempotencyKey string
+	SigningSecret  string
+	ScriptHash     string
+	MaxAttempts    int
+}
+
+// NewWebhook constructs a Webhook with a fresh ULID identifier, a consistent
+// EndpointHash, and delivery defaults (Attempt=0, MaxAttempts=20).  It is the
+// single canonical place for Webhook construction so that field population
+// remains consistent across the API server and the transformer engine.
+func NewWebhook(opts NewWebhookOpts) *Webhook {
+	maxAttempts := opts.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+
+	now := time.Now()
+	return &Webhook{
+		ID:             WebhookID("wh_" + ulid.Make().String()),
+		ConfigID:       opts.ConfigID,
+		Endpoint:       opts.Endpoint,
+		EndpointHash:   HashEndpoint(opts.Endpoint),
+		Payload:        opts.Payload,
+		Headers:        opts.Headers,
+		IdempotencyKey: opts.IdempotencyKey,
+		SigningSecret:  opts.SigningSecret,
+		ScriptHash:     opts.ScriptHash,
+		Attempt:        0,
+		MaxAttempts:    maxAttempts,
+		CreatedAt:      now,
+		ScheduledAt:    now,
+	}
 }
 
 // IsRetryable returns whether a status code indicates a retryable failure
@@ -195,8 +269,8 @@ type WebhookStateSnapshot struct {
 	ScriptHash     string            `json:"script_hash,omitempty"`
 
 	// State Info
-	State       string    `json:"state"`
-	Attempt     int       `json:"attempt"`
+	State       WebhookState `json:"state"`
+	Attempt     int          `json:"attempt"`
 	MaxAttempts int       `json:"max_attempts"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAtNs int64     `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution

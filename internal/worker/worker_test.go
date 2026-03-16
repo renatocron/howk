@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -205,14 +204,6 @@ func (m *MockHotState) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockHotState) Client() *redis.Client {
-	args := m.Called()
-	if client, ok := args.Get(0).(*redis.Client); ok {
-		return client
-	}
-	return nil
-}
-
 func (m *MockHotState) GetScript(ctx context.Context, configID domain.ConfigID) (string, error) {
 	args := m.Called(ctx, configID)
 	return args.String(0), args.Error(1)
@@ -290,6 +281,9 @@ func (m *MockHotState) AcquireReconcilerLock(ctx context.Context, ttl time.Durat
 func (m *MockHotState) DelCanary(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
+
+// Compile-time assertion: MockHotState must satisfy the full HotState interface.
+var _ hotstate.HotState = (*MockHotState)(nil)
 
 // MockDeliveryClient implements methods used by Worker from delivery.Client
 type MockDeliveryClient struct {
@@ -369,13 +363,13 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 
 	w := worker.NewWorker(
 		cfg,
-		mockBroker,         // Passed as broker.Broker interface
-		mockPublisher,      // Passed as broker.WebhookPublisher interface
-		mockHotState,       // Passed as hotstate.HotState interface
-		mockDeliveryClient, // Passed as delivery.Deliverer interface
-		mockRetryStrategy,  // Passed as retry.Retrier interface
-		testScriptEngine,   // Passed as *script.Engine
-		nil,                // domainLimiter not tested here
+		mockBroker,    // Passed as broker.Broker interface
+		mockPublisher, // Passed as broker.WebhookPublisher interface
+		mockHotState,  // Passed as hotstate.HotState interface
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	return w, mockBroker, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy
@@ -403,10 +397,10 @@ func TestNewWorker(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	assert.NotNil(t, w)
@@ -462,17 +456,44 @@ func TestWorkerGetRetry(t *testing.T) {
 	assert.Equal(t, retrier, w.GetRetry())
 }
 
-// TestWorkerSetScriptConsumer tests the SetScriptConsumer and GetScriptConsumer accessors
-func TestWorkerSetScriptConsumer(t *testing.T) {
+// TestWorkerGetScriptConsumer_NilByDefault verifies a worker constructed without
+// WithScriptConsumer has a nil script consumer (the safe default).
+func TestWorkerGetScriptConsumer_NilByDefault(t *testing.T) {
 	w, _, _, _, _, _, _ := setupWorkerTest()
-
-	// Initially nil
 	assert.Nil(t, w.GetScriptConsumer())
+}
 
-	// Set a mock consumer (we can't create a real one without Kafka, but we can test the setter)
-	// Just verify the method exists and can be called
-	// The actual consumer would be created elsewhere
+// TestWorkerWithScriptConsumer_Option verifies that WithScriptConsumer injects
+// the consumer at construction time, eliminating the post-construction setter.
+func TestWorkerWithScriptConsumer_Option(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mockBroker := new(MockBroker)
+	mockPublisher := new(MockPublisher)
+	mockHotState := new(MockHotState)
+	mockCircuitBreaker := new(mocks.MockCircuitBreaker)
+	mockDeliveryClient := new(MockDeliveryClient)
+	mockRetryStrategy := new(MockRetryStrategy)
+	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
 
-	// For this test, we just verify the initial state is nil
-	// The SetScriptConsumer would be tested in integration tests
+	testScriptLoader := script.NewLoader()
+	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})
+
+	// Construct a ScriptConsumer stand-in via the real constructor with a nil broker;
+	// we only need a non-nil pointer to verify the option wiring -- not to start it.
+	// Use a real (but inert) ScriptConsumer constructed with a mock broker.
+	dummyConsumer := script.NewConsumer(mockBroker, testScriptLoader, mockHotState, "test.scripts", "test-group", 24*time.Hour)
+
+	w := worker.NewWorker(
+		cfg,
+		mockBroker,
+		mockPublisher,
+		mockHotState,
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		worker.WithScriptConsumer(dummyConsumer),
+	)
+
+	assert.NotNil(t, w.GetScriptConsumer())
+	assert.Equal(t, dummyConsumer, w.GetScriptConsumer())
 }

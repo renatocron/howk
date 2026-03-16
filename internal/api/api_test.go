@@ -56,7 +56,7 @@ func TestEnqueueWebhook_Success(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.enqueueWebhook(c)
+	server.handleEnqueueWebhook(c)
 
 	assert.Equal(t, http.StatusAccepted, w.Code)
 	
@@ -79,7 +79,7 @@ func TestEnqueueWebhook_InvalidJSON(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.enqueueWebhook(c)
+	server.handleEnqueueWebhook(c)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -94,7 +94,7 @@ func TestEnqueueWebhook_MissingEndpoint(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.enqueueWebhook(c)
+	server.handleEnqueueWebhook(c)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -114,7 +114,7 @@ func TestEnqueueWebhook_PublishError(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.enqueueWebhook(c)
+	server.handleEnqueueWebhook(c)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 
@@ -139,7 +139,7 @@ func TestEnqueueWebhook_WithScriptHash(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.enqueueWebhook(c)
+	server.handleEnqueueWebhook(c)
 
 	assert.Equal(t, http.StatusAccepted, w.Code)
 
@@ -168,7 +168,7 @@ func TestEnqueueWebhookBatch_Success(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.enqueueWebhookBatch(c)
+	server.handleEnqueueWebhookBatch(c)
 
 	assert.Equal(t, http.StatusAccepted, w.Code)
 
@@ -205,7 +205,7 @@ func TestEnqueueWebhookBatch_PartialFailure(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.enqueueWebhookBatch(c)
+	server.handleEnqueueWebhookBatch(c)
 
 	// Returns 202 Accepted even for partial failures
 	assert.Equal(t, http.StatusAccepted, w.Code)
@@ -228,7 +228,7 @@ func TestGetStatus_Success(t *testing.T) {
 	c.Request = httptest.NewRequest("GET", "/webhooks/webhook-123/status", nil)
 	c.Params = gin.Params{{Key: "webhook_id", Value: "webhook-123"}}
 
-	server.getStatus(c)
+	server.handleGetStatus(c)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -250,7 +250,7 @@ func TestGetStatus_NotFound(t *testing.T) {
 	c.Request = httptest.NewRequest("GET", "/webhooks/webhook-123/status", nil)
 	c.Params = gin.Params{{Key: "webhook_id", Value: "webhook-123"}}
 
-	server.getStatus(c)
+	server.handleGetStatus(c)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
@@ -267,7 +267,7 @@ func TestGetStatus_Error(t *testing.T) {
 	c.Request = httptest.NewRequest("GET", "/webhooks/webhook-123/status", nil)
 	c.Params = gin.Params{{Key: "webhook_id", Value: "webhook-123"}}
 
-	server.getStatus(c)
+	server.handleGetStatus(c)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 
@@ -305,7 +305,7 @@ func TestReadyCheck_Healthy(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/ready", nil)
 
-	server.readyCheck(c)
+	server.handleReadyCheck(c)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -321,7 +321,7 @@ func TestReadyCheck_Unhealthy(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/ready", nil)
 
-	server.readyCheck(c)
+	server.handleReadyCheck(c)
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 
@@ -353,7 +353,7 @@ func TestGetStats_Success(t *testing.T) {
 	c.Request = httptest.NewRequest("GET", "/config/test-config/stats", nil)
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.getStats(c)
+	server.handleGetStats(c)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -377,7 +377,7 @@ func TestGetStats_Error(t *testing.T) {
 	c.Request = httptest.NewRequest("GET", "/config/test-config/stats", nil)
 	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
 
-	server.getStats(c)
+	server.handleGetStats(c)
 
 	// Even if underlying calls fail, it returns 200 with empty stats
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -396,7 +396,7 @@ func TestDependenciesCheck_AllHealthy(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/health/dependencies", nil)
 
-	server.dependenciesCheck(c)
+	server.handleDependenciesCheck(c)
 
 	// Note: The Kafka health check uses type assertion, may not detect mock
 	assert.Contains(t, []int{http.StatusOK, http.StatusServiceUnavailable}, w.Code)
@@ -414,7 +414,7 @@ func TestDependenciesCheck_RedisError(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/health/dependencies", nil)
 
-	server.dependenciesCheck(c)
+	server.handleDependenciesCheck(c)
 
 	// Should return 503 when Redis is unhealthy
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
@@ -460,7 +460,7 @@ func TestDependenciesCheck_KafkaError(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/health/dependencies", nil)
 
-	server.dependenciesCheck(c)
+	server.handleDependenciesCheck(c)
 
 	// Mock doesn't implement Ping, so Kafka shows as healthy (default behavior)
 	// The nil publisher case is tested separately in TestDependenciesCheck_KafkaNilPublisher
@@ -491,7 +491,7 @@ func TestDependenciesCheck_KafkaNilPublisher(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/health/dependencies", nil)
 
-	server.dependenciesCheck(c)
+	server.handleDependenciesCheck(c)
 
 	// Should return 503 when publisher is nil
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)

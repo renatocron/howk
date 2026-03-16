@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockValidator implements script.ValidatorInterface for testing
+// MockValidator implements script.SyntaxChecker for testing
 type MockValidator struct {
 	mock.Mock
 }
@@ -18,12 +18,12 @@ func (m *MockValidator) ValidateSyntax(luaCode string) error {
 	return args.Error(0)
 }
 
-// MockPublisher implements script.PublisherInterface for testing
+// MockPublisher implements script.ScriptPublisher for testing
 type MockPublisher struct {
 	mock.Mock
 }
 
-func (m *MockPublisher) PublishScript(ctx context.Context, s *script.ScriptConfig) error {
+func (m *MockPublisher) PublishScript(ctx context.Context, s *script.Config) error {
 	args := m.Called(ctx, s)
 	return args.Error(0)
 }
@@ -34,5 +34,5 @@ func (m *MockPublisher) DeleteScript(ctx context.Context, configID domain.Config
 }
 
 // Compile-time assertions
-var _ script.ValidatorInterface = (*MockValidator)(nil)
-var _ script.PublisherInterface = (*MockPublisher)(nil)
+var _ script.SyntaxChecker = (*MockValidator)(nil)
+var _ script.ScriptPublisher = (*MockPublisher)(nil)

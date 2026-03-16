@@ -46,7 +46,11 @@ func setupWorkerTest(t *testing.T, httpServer *httptest.Server) (*worker.Worker,
 	rs := retry.NewStrategy(env.Config.Retry)
 	se := script.NewEngine(env.Config.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
-	w := worker.NewWorker(env.Config, env.Broker, pub, env.HotState, dc, rs, se, nil)
+	w := worker.NewWorker(env.Config, env.Broker, pub, env.HotState,
+		worker.WithDeliveryClient(dc),
+		worker.WithRetryStrategy(rs),
+		worker.WithScriptEngine(se),
+	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -141,7 +145,11 @@ func TestWorker_CircuitOpens(t *testing.T) {
 	rs := retry.NewStrategy(env.Config.Retry)
 	se := script.NewEngine(env.Config.Lua, script.NewLoader(), nil, nil, nil, zerolog.Logger{})
 
-	w := worker.NewWorker(env.Config, env.Broker, pub, env.HotState, dc, rs, se, nil)
+	w := worker.NewWorker(env.Config, env.Broker, pub, env.HotState,
+		worker.WithDeliveryClient(dc),
+		worker.WithRetryStrategy(rs),
+		worker.WithScriptEngine(se),
+	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
