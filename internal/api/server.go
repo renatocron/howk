@@ -24,8 +24,8 @@ type Server struct {
 	config              config.APIConfig
 	publisher           broker.WebhookPublisher
 	hotstate            hotstate.HotState
-	scriptValidator     script.ValidatorInterface
-	scriptPublisher     script.PublisherInterface
+	scriptValidator     script.SyntaxChecker
+	scriptPublisher     script.ScriptPublisher
 	transformerRegistry *transformer.Registry
 	transformerEngine   *transformer.Engine
 	router              *gin.Engine
@@ -40,8 +40,8 @@ func NewServer(
 	cfg config.APIConfig,
 	pub broker.WebhookPublisher,
 	hs hotstate.HotState,
-	scriptValidator script.ValidatorInterface,
-	scriptPublisher script.PublisherInterface,
+	scriptValidator script.SyntaxChecker,
+	scriptPublisher script.ScriptPublisher,
 	opts ...ServerOption,
 ) *Server {
 	gin.SetMode(gin.ReleaseMode)
