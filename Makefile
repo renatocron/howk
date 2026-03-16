@@ -34,8 +34,8 @@ test-unit:
 
 test: test-unit
 
-# Coverage packages to exclude (test utilities and mocks only)
-COVERAGE_EXCLUDES := cmd/ internal/mocks/ internal/testutil/
+# Coverage packages to exclude (test utilities, mocks, and stress-test binaries)
+COVERAGE_EXCLUDES := cmd/ internal/mocks/ internal/testutil/ bench/
 
 # Filter coverage file to exclude certain packages
 define filter_coverage
