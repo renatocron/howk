@@ -145,24 +145,24 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 	// Check domain-level concurrency.
 	// runConcurrencyGate encapsulates the acquire→divert-or-NACK pattern used by
 	// both the domain limiter and the inflight counter; see its definition below.
-	domainAcquired, err := w.runConcurrencyGate(ctx, &webhook, isSlowLane, concurrencyGate{
+	domainAcquired, err := w.runConcurrencyGate(ctx, &webhook, isSlowLane, ConcurrencyGate{
 		// active guards against a nil domainLimiter so the gate is a no-op when absent
-		active: w.domainLimiter != nil,
-		tryAcquire: func() (bool, error) {
+		Active: w.domainLimiter != nil,
+		TryAcquire: func() (bool, error) {
 			return w.domainLimiter.TryAcquire(ctx, webhook.Endpoint)
 		},
-		release: func() error {
+		Release: func() error {
 			return w.domainLimiter.Release(ctx, webhook.Endpoint)
 		},
 		// Domain gate has no fail-open re-acquire; if divert fails we proceed without re-taking the slot.
-		reacquireOnDivertFail: nil,
-		nackErr:    fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint),
-		logDivert:  "Domain concurrency limit reached, diverting to slow lane",
-		logSatured: "Domain concurrency limit reached even in slow lane, NACKing for retry",
+		ReacquireOnDivertFail: nil,
+		NackErr:    fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint),
+		LogDivert:  "Domain concurrency limit reached, diverting to slow lane",
+		LogSatured: "Domain concurrency limit reached even in slow lane, NACKing for retry",
 	})
 	if err != nil {
 		// err is either the NACK sentinel or the gated divert-succeeded signal
-		if err == errDiverted {
+		if err == ErrDiverted {
 			w.recordStats(ctx, "diverted", &webhook)
 			return nil
 		}
@@ -177,9 +177,9 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 	}()
 
 	// Check in-flight concurrency (penalty box gate).
-	inflightAcquired, err := w.runConcurrencyGate(ctx, &webhook, isSlowLane, concurrencyGate{
-		active: true,
-		tryAcquire: func() (bool, error) {
+	inflightAcquired, err := w.runConcurrencyGate(ctx, &webhook, isSlowLane, ConcurrencyGate{
+		Active: true,
+		TryAcquire: func() (bool, error) {
 			count, err := w.hotstate.IncrInflight(ctx, webhook.EndpointHash, w.config.Concurrency.InflightTTL)
 			if err != nil {
 				return false, err
@@ -191,21 +191,21 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 			}
 			return true, nil
 		},
-		release: func() error {
+		Release: func() error {
 			return w.hotstate.DecrInflight(ctx, webhook.EndpointHash)
 		},
 		// Fail-open: if PublishToSlow fails, re-acquire the inflight slot so the
 		// deferred release remains balanced.
-		reacquireOnDivertFail: func() {
+		ReacquireOnDivertFail: func() {
 			w.hotstate.IncrInflight(ctx, webhook.EndpointHash, w.config.Concurrency.InflightTTL)
 		},
-		nackErr: fmt.Errorf("endpoint saturated in slow lane: threshold=%d",
+		NackErr: fmt.Errorf("endpoint saturated in slow lane: threshold=%d",
 			w.config.Concurrency.MaxInflightPerEndpoint),
-		logDivert:  "Endpoint over concurrency threshold, diverting to slow lane",
-		logSatured: "Endpoint saturated even in slow lane, NACKing for retry",
+		LogDivert:  "Endpoint over concurrency threshold, diverting to slow lane",
+		LogSatured: "Endpoint saturated even in slow lane, NACKing for retry",
 	})
 	if err != nil {
-		if err == errDiverted {
+		if err == ErrDiverted {
 			w.recordStats(ctx, "diverted", &webhook)
 			return nil
 		}
@@ -695,57 +695,61 @@ func (w *Worker) sendToDLQ(ctx context.Context, webhook *domain.Webhook, reasonT
 	return nil
 }
 
-// errDiverted is a sentinel error returned by runConcurrencyGate when the
+// ErrDiverted is a sentinel error returned by runConcurrencyGate when the
 // webhook was successfully forwarded to the slow lane.  Callers should record
-// stats and return nil to ACK the original message.
-var errDiverted = fmt.Errorf("diverted to slow lane")
+// stats and return nil to ACK the original message.  Exported so tests can
+// distinguish divert from NACK without depending on the error message string.
+var ErrDiverted = fmt.Errorf("diverted to slow lane")
 
-// concurrencyGate holds the callbacks and metadata for one concurrency gate
+// ConcurrencyGate holds the callbacks and metadata for one concurrency gate
 // (domain limiter or inflight counter).  Both gates share the same acquire →
 // divert-or-NACK logic, differing only in how the slot is acquired/released
 // and whether a fail-open re-acquire is needed.
-type concurrencyGate struct {
-	// active skips the gate entirely when false (e.g. no domain limiter configured).
-	active bool
+//
+// Fields are exported so that tests in the worker_test package can construct
+// gate configurations via RunConcurrencyGate without reflection.
+type ConcurrencyGate struct {
+	// Active skips the gate entirely when false (e.g. no domain limiter configured).
+	Active bool
 
-	// tryAcquire attempts to claim a slot.  Returns (true, nil) on success,
+	// TryAcquire attempts to claim a slot.  Returns (true, nil) on success,
 	// (false, nil) when at capacity, or (false, err) on infrastructure failure
 	// (treated as fail-open: proceed without a slot).
-	tryAcquire func() (bool, error)
+	TryAcquire func() (bool, error)
 
-	// release frees the slot on all exit paths after a successful acquire.
-	release func() error
+	// Release frees the slot on all exit paths after a successful acquire.
+	Release func() error
 
-	// reacquireOnDivertFail is called when PublishToSlow fails so the deferred
+	// ReacquireOnDivertFail is called when PublishToSlow fails so the deferred
 	// release remains balanced.  May be nil for gates that skip the re-acquire.
-	reacquireOnDivertFail func()
+	ReacquireOnDivertFail func()
 
-	// nackErr is returned when the webhook is in the slow lane and still over
+	// NackErr is returned when the webhook is in the slow lane and still over
 	// threshold, signalling Kafka to redeliver after backoff.
-	nackErr error
+	NackErr error
 
-	// logDivert / logSatured are the log messages emitted before divert / NACK.
-	logDivert  string
-	logSatured string
+	// LogDivert / LogSatured are the log messages emitted before divert / NACK.
+	LogDivert  string
+	LogSatured string
 }
 
 // runConcurrencyGate executes the acquire→divert-or-NACK pattern for a single
 // concurrency gate.  It returns:
 //   - (true,  nil)          — slot acquired; caller must release via defer
 //   - (false, nil)          — gate inactive or infrastructure error (fail-open)
-//   - (false, errDiverted)  — message forwarded to slow lane; caller should return nil after recording stats
-//   - (false, nackErr)      — slow-lane saturation; caller must propagate the error to NACK
+//   - (false, ErrDiverted)  — message forwarded to slow lane; caller should return nil after recording stats
+//   - (false, NackErr)      — slow-lane saturation; caller must propagate the error to NACK
 func (w *Worker) runConcurrencyGate(
 	ctx context.Context,
 	webhook *domain.Webhook,
 	isSlowLane bool,
-	gate concurrencyGate,
+	gate ConcurrencyGate,
 ) (acquired bool, err error) {
-	if !gate.active {
+	if !gate.Active {
 		return false, nil
 	}
 
-	ok, acquireErr := gate.tryAcquire()
+	ok, acquireErr := gate.TryAcquire()
 	if acquireErr != nil {
 		// Infrastructure failure → fail-open (proceed without holding a slot)
 		log.Warn().Err(acquireErr).Msg("Concurrency gate check failed, proceeding")
@@ -758,25 +762,25 @@ func (w *Worker) runConcurrencyGate(
 
 	// At capacity: divert or NACK depending on lane
 	if isSlowLane {
-		log.Info().Msg(gate.logSatured)
-		return false, gate.nackErr
+		log.Info().Msg(gate.LogSatured)
+		return false, gate.NackErr
 	}
 
-	log.Info().Msg(gate.logDivert)
+	log.Info().Msg(gate.LogDivert)
 
 	if publishErr := w.publisher.PublishToSlow(ctx, webhook); publishErr != nil {
 		log.Error().Err(publishErr).Msg("Failed to divert to slow lane, proceeding with delivery")
 		// Fail-open: if a re-acquire func is provided, restore the slot so the
 		// deferred release in the caller stays balanced.
-		if gate.reacquireOnDivertFail != nil {
-			gate.reacquireOnDivertFail()
+		if gate.ReacquireOnDivertFail != nil {
+			gate.ReacquireOnDivertFail()
 			return true, nil
 		}
 		// No re-acquire needed; proceed without holding a slot.
 		return false, nil
 	}
 
-	return false, errDiverted
+	return false, ErrDiverted
 }
 
 func (w *Worker) GetConfig() *config.Config {
