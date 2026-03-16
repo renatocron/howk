@@ -89,6 +89,40 @@ func (e *Engine) loadLogModule(L *lua.LState, webhookID string) {
 	}
 }
 
+// EnsureScript guarantees the script for configID is present in the Loader's
+// in-memory cache before execution.  If the Loader already holds the script this
+// is a no-op.  Otherwise it fetches the JSON-encoded script from store, parses
+// it, and populates the cache.  A fetch or parse failure is logged as a warning
+// but does not return an error — the subsequent Execute call will return a
+// ScriptErrorNotFound which triggers the appropriate DLQ path.
+func (e *Engine) EnsureScript(ctx context.Context, configID domain.ConfigID, store ScriptStore) {
+	// Fast path: already cached.
+	if _, err := e.loader.GetScript(configID); err == nil {
+		return
+	}
+
+	scriptJSON, err := store.GetScript(ctx, configID)
+	if err != nil || scriptJSON == "" {
+		// Nothing to cache; Execute will surface ScriptErrorNotFound.
+		return
+	}
+
+	var cfg Config
+	if err := json.Unmarshal([]byte(scriptJSON), &cfg); err != nil {
+		e.logger.Warn().
+			Err(err).
+			Str("config_id", string(configID)).
+			Msg("EnsureScript: failed to parse script JSON from store")
+		return
+	}
+
+	e.loader.SetScript(&cfg)
+	e.logger.Debug().
+		Str("config_id", string(configID)).
+		Str("script_hash", cfg.Hash).
+		Msg("EnsureScript: loaded script from store into cache")
+}
+
 // Execute runs a Lua script to transform a webhook
 func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.Webhook, error) {
 	// Check if scripts are enabled

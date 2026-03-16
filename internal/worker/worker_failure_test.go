@@ -63,7 +63,7 @@ func TestWorker_ProcessMessage_IdempotencyCheckError(t *testing.T) {
 	mockPublisher.On("PublishResult", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording - use Client() for pipelining
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -113,7 +113,7 @@ func TestWorker_ProcessMessage_CircuitBreakerError(t *testing.T) {
 	mockPublisher.On("PublishResult", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -158,7 +158,7 @@ func TestWorker_ProcessMessage_CircuitOpen(t *testing.T) {
 	mockHotState.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -234,7 +234,7 @@ func TestWorker_ProcessMessage_DeliveryFailure_Retryable(t *testing.T) {
 	mockHotState.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -286,7 +286,7 @@ func TestWorker_ProcessMessage_DeliveryFailure_NonRetryable(t *testing.T) {
 	mockPublisher.On("PublishDeadLetter", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -343,7 +343,7 @@ func TestWorker_ProcessMessage_ExhaustedAttempts(t *testing.T) {
 	mockPublisher.On("PublishDeadLetter", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -392,7 +392,7 @@ func TestWorker_ProcessMessage_StatusUpdateError(t *testing.T) {
 	mockPublisher.On("PublishResult", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -439,7 +439,7 @@ func TestWorker_ProcessMessage_PublishResultError(t *testing.T) {
 	mockPublisher.On("PublishResult", mock.Anything, mock.Anything).Return(errors.New("kafka unavailable"))
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -494,7 +494,7 @@ func TestWorker_ProcessMessage_CircuitOpensDuringFailure(t *testing.T) {
 	mockHotState.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -548,7 +548,7 @@ func TestWorker_ProcessMessage_RetrySchedulingError(t *testing.T) {
 	mockHotState.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -596,7 +596,7 @@ func TestWorker_ProcessMessage_ProbeRequest(t *testing.T) {
 	mockPublisher.On("PublishResult", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -646,7 +646,7 @@ func TestWorker_ProcessMessage_DLQPublishError(t *testing.T) {
 	mockPublisher.On("PublishDeadLetter", mock.Anything, mock.Anything).Return(errors.New("kafka publish failed"))
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -696,7 +696,7 @@ func TestWorker_ProcessMessage_CleanupRetryDataError(t *testing.T) {
 	mockPublisher.On("PublishResult", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -743,7 +743,7 @@ func TestWorker_ProcessMessage_RecordSuccessError(t *testing.T) {
 	mockPublisher.On("PublishResult", mock.Anything, mock.Anything).Return(nil)
 
 	// Stats recording
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockHotState.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 

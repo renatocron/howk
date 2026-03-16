@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -205,14 +204,6 @@ func (m *MockHotState) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockHotState) Client() *redis.Client {
-	args := m.Called()
-	if client, ok := args.Get(0).(*redis.Client); ok {
-		return client
-	}
-	return nil
-}
-
 func (m *MockHotState) GetScript(ctx context.Context, configID domain.ConfigID) (string, error) {
 	args := m.Called(ctx, configID)
 	return args.String(0), args.Error(1)
@@ -290,6 +281,9 @@ func (m *MockHotState) AcquireReconcilerLock(ctx context.Context, ttl time.Durat
 func (m *MockHotState) DelCanary(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
+
+// Compile-time assertion: MockHotState must satisfy the full HotState interface.
+var _ hotstate.HotState = (*MockHotState)(nil)
 
 // MockDeliveryClient implements methods used by Worker from delivery.Client
 type MockDeliveryClient struct {
@@ -369,13 +363,13 @@ func setupWorkerTest() (*worker.Worker, *MockBroker, *MockPublisher, *MockHotSta
 
 	w := worker.NewWorker(
 		cfg,
-		mockBroker,         // Passed as broker.Broker interface
-		mockPublisher,      // Passed as broker.WebhookPublisher interface
-		mockHotState,       // Passed as hotstate.HotState interface
-		mockDeliveryClient, // Passed as delivery.Deliverer interface
-		mockRetryStrategy,  // Passed as retry.Retrier interface
-		testScriptEngine,   // Passed as *script.Engine
-		nil,                // domainLimiter not tested here
+		mockBroker,    // Passed as broker.Broker interface
+		mockPublisher, // Passed as broker.WebhookPublisher interface
+		mockHotState,  // Passed as hotstate.HotState interface
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	return w, mockBroker, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy
@@ -403,10 +397,10 @@ func TestNewWorker(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	assert.NotNil(t, w)
@@ -494,10 +488,9 @@ func TestWorkerWithScriptConsumer_Option(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil,
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
 		worker.WithScriptConsumer(dummyConsumer),
 	)
 

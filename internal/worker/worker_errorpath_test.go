@@ -90,10 +90,10 @@ func setupWorkerWithDomainLimiter(t *testing.T, dl delivery.DomainLimiter) (
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		dl,
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		worker.WithDomainLimiter(dl),
 	)
 	return w, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy
 }
@@ -135,10 +135,9 @@ func setupWorkerForScriptTest(t *testing.T, luaEnabled bool) (
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		engine,
-		nil,
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(engine),
 	)
 	return w, mockPublisher, mockHotState, mockCircuitBreaker, mockDeliveryClient, mockRetryStrategy, loader
 }
@@ -360,7 +359,10 @@ func TestInflight_SlowLane_OverThreshold_ReturnsError(t *testing.T) {
 	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})
 
 	w := worker.NewWorker(cfg, mockBroker, mockPublisher, mockHotState,
-		mockDeliveryClient, mockRetryStrategy, testScriptEngine, nil)
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+	)
 	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
 
 	wh := &domain.Webhook{
@@ -827,7 +829,10 @@ func TestHandleScriptError_Timeout(t *testing.T) {
 	engine := script.NewEngine(cfg.Lua, loader, nil, nil, nil, zerolog.Logger{})
 
 	w := worker.NewWorker(cfg, mockBroker, mockPublisher, mockHotState,
-		mockDeliveryClient, mockRetryStrategy, engine, nil)
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(engine),
+	)
 
 	wh := webhookWithScript("timeout-hash")
 	// Infinite loop that will time out.
@@ -916,7 +921,10 @@ func TestSlowWorker_ProcessSlowMessage_NACKPropagated(t *testing.T) {
 	engine := script.NewEngine(config.LuaConfig{Enabled: false}, loader, nil, nil, nil, zerolog.Logger{})
 
 	w := worker.NewWorker(cfg, mockBroker, mockPublisher, mockHotState,
-		mockDeliveryClient, mockRetryStrategy, engine, nil)
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(engine),
+	)
 	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
 
 	wh := &domain.Webhook{

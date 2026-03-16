@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -122,10 +121,6 @@ func (m *MockHotState) Close() error {
 	return m.Called().Error(0)
 }
 
-func (m *MockHotState) Client() *redis.Client {
-	return m.Called().Get(0).(*redis.Client)
-}
-
 func (m *MockHotState) IncrInflight(ctx context.Context, endpointHash domain.EndpointHash, ttl time.Duration) (int64, error) {
 	args := m.Called(ctx, endpointHash, ttl)
 	return args.Get(0).(int64), args.Error(1)
@@ -180,6 +175,9 @@ func (m *MockHotState) AcquireReconcilerLock(ctx context.Context, ttl time.Durat
 func (m *MockHotState) DelCanary(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
+
+// Compile-time assertion: MockHotState must satisfy the full HotState interface.
+var _ hotstate.HotState = (*MockHotState)(nil)
 
 // MockCircuitBreakerChecker is a mock implementation of hotstate.CircuitBreakerChecker
 type MockCircuitBreakerChecker struct {

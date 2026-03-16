@@ -44,10 +44,9 @@ func newMinimalWorker(t *testing.T, pub *MockPublisher) *worker.Worker {
 		mockBroker,
 		pub,
 		mockHotState,
-		&MockDeliveryClient{},
-		&MockRetryStrategy{},
-		engine,
-		nil,
+		worker.WithDeliveryClient(&MockDeliveryClient{}),
+		worker.WithRetryStrategy(&MockRetryStrategy{}),
+		worker.WithScriptEngine(engine),
 	)
 }
 

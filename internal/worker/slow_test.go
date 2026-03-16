@@ -49,10 +49,10 @@ func TestSlowWorker_RateLimiting(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	// Create slow worker
@@ -86,10 +86,10 @@ func TestSlowWorker_UsesCorrectConsumerGroup(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	// The slow worker should subscribe with "howk-workers-slow" consumer group
@@ -174,10 +174,10 @@ func TestSlowWorker_ProcessMessage_Success(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	// Create slow worker
@@ -209,10 +209,10 @@ func TestSlowWorker_Creation(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
@@ -244,10 +244,10 @@ func TestProcessSlowMessage_MalformedJSON(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
@@ -324,7 +324,7 @@ func TestProcessSlowMessage_Success(t *testing.T) {
 
 	// Stats recording - processMessage records delivered, processSlowMessage records slow_delivered
 	mockHotState.On("IncrStats", ctx, mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockHotState.On("Client").Return(nil)
+	mockHotState.On("Client").Return(nil).Maybe()
 	mockHotState.On("AddToHLL", ctx, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// DECR on exit
@@ -341,10 +341,10 @@ func TestProcessSlowMessage_Success(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)
@@ -450,10 +450,10 @@ func TestProcessSlowMessage_ProcessError(t *testing.T) {
 		mockBroker,
 		mockPublisher,
 		mockHotState,
-		mockDeliveryClient,
-		mockRetryStrategy,
-		testScriptEngine,
-		nil, // domainLimiter not tested here
+		worker.WithDeliveryClient(mockDeliveryClient),
+		worker.WithRetryStrategy(mockRetryStrategy),
+		worker.WithScriptEngine(testScriptEngine),
+		// domainLimiter not tested here
 	)
 
 	slowWorker := worker.NewSlowWorker(w, mockBroker, cfg)

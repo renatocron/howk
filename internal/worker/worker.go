@@ -46,29 +46,58 @@ func WithScriptConsumer(consumer *script.Consumer) WorkerOption {
 	}
 }
 
-// NewWorker creates a new worker. Pass functional options (e.g. WithScriptConsumer)
-// to configure optional dependencies at construction time.
+// WithDeliveryClient sets the HTTP delivery client.  When omitted the Worker
+// will panic on the first delivery attempt, so callers in production must
+// always supply this option.
+func WithDeliveryClient(d delivery.Deliverer) WorkerOption {
+	return func(w *Worker) {
+		w.delivery = d
+	}
+}
+
+// WithRetryStrategy sets the retry strategy used to schedule back-off delays
+// and determine when a webhook is exhausted.
+func WithRetryStrategy(r retry.Retrier) WorkerOption {
+	return func(w *Worker) {
+		w.retry = r
+	}
+}
+
+// WithScriptEngine sets the Lua script engine.  When omitted, webhooks that
+// carry a ScriptHash will be sent to the DLQ (script execution is unavailable).
+func WithScriptEngine(e *script.Engine) WorkerOption {
+	return func(w *Worker) {
+		w.scriptEngine = e
+	}
+}
+
+// WithDomainLimiter sets the per-domain concurrency limiter.  Passing nil
+// (or omitting the option) disables domain-level rate limiting.
+func WithDomainLimiter(dl delivery.DomainLimiter) WorkerOption {
+	return func(w *Worker) {
+		w.domainLimiter = dl
+	}
+}
+
+// NewWorker creates a new worker.
+//
+// Required positional dependencies (config, broker, publisher, hotstate) must
+// always be provided.  Optional dependencies (delivery client, retry strategy,
+// script engine, domain limiter) are injected via WorkerOption functions such as
+// WithDeliveryClient, WithRetryStrategy, WithScriptEngine, and WithDomainLimiter.
 func NewWorker(
 	cfg *config.Config,
 	kafkaBroker broker.Broker,
 	publisher broker.WebhookPublisher,
 	hotState hotstate.HotState,
-	deliveryClient delivery.Deliverer,
-	retryStrategy retry.Retrier,
-	scriptEngine *script.Engine,
-	domainLimiter delivery.DomainLimiter,
 	opts ...WorkerOption,
 ) *Worker {
 	w := &Worker{
-		config:        cfg,
-		broker:        kafkaBroker,
-		publisher:     publisher,
-		hotstate:      hotState,
-		circuit:       hotState.CircuitBreaker(),
-		delivery:      deliveryClient,
-		domainLimiter: domainLimiter,
-		retry:         retryStrategy,
-		scriptEngine:  scriptEngine,
+		config:    cfg,
+		broker:    kafkaBroker,
+		publisher: publisher,
+		hotstate:  hotState,
+		circuit:   hotState.CircuitBreaker(),
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -230,20 +259,10 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 			return w.sendToDLQForScriptDisabled(ctx, &webhook)
 		}
 
-		// Try to load script from Redis if not in cache
-		// This handles the case where the worker starts before scripts are loaded
-		scriptJSON, err := w.hotstate.GetScript(ctx, webhook.ConfigID)
-		if err == nil && scriptJSON != "" {
-			// Parse and load into script engine's loader
-			var scriptConfig script.Config
-			if err := json.Unmarshal([]byte(scriptJSON), &scriptConfig); err == nil {
-				w.scriptEngine.GetLoader().SetScript(&scriptConfig)
-				logger.Debug().
-					Str("config_id", string(webhook.ConfigID)).
-					Str("script_hash", scriptConfig.Hash).
-					Msg("Loaded script from Redis into cache")
-			}
-		}
+		// Ensure the script is in the engine's in-memory cache before executing.
+		// EnsureScript fetches from Redis when the cache is cold (e.g. worker
+		// restarted before the Kafka script consumer replayed the latest config).
+		w.scriptEngine.EnsureScript(ctx, webhook.ConfigID, w.hotstate)
 
 		// Execute script
 		logger.Debug().Str("script_hash", webhook.ScriptHash).Msg("Executing script transformation")
@@ -543,26 +562,6 @@ func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webho
 func (w *Worker) recordStats(ctx context.Context, stat string, webhook *domain.Webhook) {
 	bucket := time.Now().Format("2006010215") // hourly bucket
 
-	// Use Redis pipelining for better performance when a client is available
-	if client := w.hotstate.Client(); client != nil {
-		pipe := client.Pipeline()
-
-		// Batch both operations
-		statsKey := fmt.Sprintf("stats:%s:%s", stat, bucket)
-		pipe.IncrBy(ctx, statsKey, 1)
-		pipe.Expire(ctx, statsKey, w.config.TTL.StatsTTL)
-
-		hllKey := fmt.Sprintf("hll:endpoints:%s", bucket)
-		pipe.PFAdd(ctx, hllKey, string(webhook.EndpointHash))
-		pipe.Expire(ctx, hllKey, w.config.TTL.StatsTTL)
-
-		if _, err := pipe.Exec(ctx); err != nil {
-			log.Warn().Err(err).Msg("Failed to record stats")
-		}
-		return
-	}
-
-	// Fallback to individual operations if pipeline unavailable (e.g., mocks)
 	if err := w.hotstate.IncrStats(ctx, bucket, map[string]int64{stat: 1}); err != nil {
 		log.Warn().Err(err).Msg("Failed to increment stats")
 	}

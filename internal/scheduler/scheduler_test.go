@@ -12,7 +12,6 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -117,14 +116,6 @@ func (m *MockHotState) Close() error {
 	return args.Error(0)
 }
 
-func (m *MockHotState) Client() *redis.Client {
-	args := m.Called()
-	if client, ok := args.Get(0).(*redis.Client); ok {
-		return client
-	}
-	return nil
-}
-
 func (m *MockHotState) GetScript(ctx context.Context, configID domain.ConfigID) (string, error) {
 	args := m.Called(ctx, configID)
 	return args.String(0), args.Error(1)
@@ -194,6 +185,9 @@ func (m *MockHotState) AcquireReconcilerLock(ctx context.Context, ttl time.Durat
 func (m *MockHotState) DelCanary(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
+
+// Compile-time assertion: MockHotState must satisfy the full HotState interface.
+var _ hotstate.HotState = (*MockHotState)(nil)
 
 // MockPublisher implements broker.WebhookPublisher for testing
 type MockPublisher struct {

@@ -119,9 +119,14 @@ func main() {
 		go metrics.ListenAndServe(ctx, cfg.Metrics.Port)
 	}
 
-	// Build worker options. Script consumer is wired at construction time via
-	// WithScriptConsumer to avoid fragile post-construction setter calls.
-	var workerOpts []worker.WorkerOption
+	// Build worker options. All optional dependencies are injected via options so
+	// that the NewWorker signature remains self-documenting at the call site.
+	workerOpts := []worker.WorkerOption{
+		worker.WithDeliveryClient(dc),
+		worker.WithRetryStrategy(rs),
+		worker.WithScriptEngine(scriptEngine),
+		worker.WithDomainLimiter(domainLimiter),
+	}
 	if cfg.Lua.Enabled {
 		scriptConsumer := script.NewConsumer(
 			kafkaBroker,
@@ -135,7 +140,7 @@ func main() {
 	}
 
 	// Create worker with all dependencies resolved at construction time
-	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, dc, rs, scriptEngine, domainLimiter, workerOpts...)
+	w := worker.NewWorker(cfg, kafkaBroker, publisher, hs, workerOpts...)
 
 	// Run worker
 	go func() {

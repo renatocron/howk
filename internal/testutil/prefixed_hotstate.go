@@ -21,13 +21,17 @@ import (
 // This enables multiple tests to use the same Redis DB without conflicts.
 type PrefixedHotState struct {
 	inner  *hotstate.RedisHotState
+	rdb    *redis.Client
 	prefix string
 }
 
 // NewPrefixedHotState wraps an existing RedisHotState with key prefixing.
+// The raw Redis client is captured at construction time so that PrefixedHotState
+// does not need to call inner.Client() (which is not part of the HotState interface).
 func NewPrefixedHotState(inner *hotstate.RedisHotState, prefix string) *PrefixedHotState {
 	return &PrefixedHotState{
 		inner:  inner,
+		rdb:    inner.Client(),
 		prefix: prefix,
 	}
 }
@@ -55,7 +59,7 @@ func (p *PrefixedHotState) SetStatus(ctx context.Context, status *domain.Webhook
 	// Serialize the status and use prefixed key directly via Redis client
 	// Since RedisHotState doesn't expose a way to override key prefixing,
 	// we need to use the underlying client
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("status:" + string(status.WebhookID))
 
 	// Use the same serialization as RedisHotState
@@ -68,7 +72,7 @@ func (p *PrefixedHotState) SetStatus(ctx context.Context, status *domain.Webhook
 }
 
 func (p *PrefixedHotState) GetStatus(ctx context.Context, webhookID domain.WebhookID) (*domain.WebhookStatus, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("status:" + string(webhookID))
 
 	data, err := client.Get(ctx, key).Bytes()
@@ -93,7 +97,7 @@ func (p *PrefixedHotState) EnsureRetryData(ctx context.Context, webhook *domain.
 	// For now, delegate to inner but with prefixed key via Lua or direct access
 	// Since the inner hotstate uses hardcoded prefixes, we need to work around this
 
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("retry_data:" + string(webhook.ID))
 
 	// Check if key exists first
@@ -115,7 +119,7 @@ func (p *PrefixedHotState) EnsureRetryData(ctx context.Context, webhook *domain.
 }
 
 func (p *PrefixedHotState) ScheduleRetry(ctx context.Context, webhookID domain.WebhookID, attempt int, scheduledAt time.Time, reason string) error {
-	client := p.inner.Client()
+	client := p.rdb
 	reference := fmt.Sprintf("%s:%d", webhookID, attempt)
 
 	// Store metadata
@@ -144,7 +148,7 @@ func (p *PrefixedHotState) ScheduleRetry(ctx context.Context, webhookID domain.W
 }
 
 func (p *PrefixedHotState) PopAndLockRetries(ctx context.Context, limit int, lockDuration time.Duration) ([]string, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	retryQueueKey := p.prefixKey("retries")
 
 	now := float64(time.Now().Unix())
@@ -165,7 +169,7 @@ func (p *PrefixedHotState) PopAndLockRetries(ctx context.Context, limit int, loc
 }
 
 func (p *PrefixedHotState) GetRetryData(ctx context.Context, webhookID domain.WebhookID) (*domain.Webhook, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("retry_data:" + string(webhookID))
 
 	data, err := client.Get(ctx, key).Bytes()
@@ -180,7 +184,7 @@ func (p *PrefixedHotState) GetRetryData(ctx context.Context, webhookID domain.We
 }
 
 func (p *PrefixedHotState) AckRetry(ctx context.Context, reference string) error {
-	client := p.inner.Client()
+	client := p.rdb
 	retryQueueKey := p.prefixKey("retries")
 	metaKey := p.prefixKey("retry_meta:" + reference)
 
@@ -192,7 +196,7 @@ func (p *PrefixedHotState) AckRetry(ctx context.Context, reference string) error
 }
 
 func (p *PrefixedHotState) DeleteRetryData(ctx context.Context, webhookID domain.WebhookID) error {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("retry_data:" + string(webhookID))
 	return client.Del(ctx, key).Err()
 }
@@ -203,14 +207,14 @@ func (p *PrefixedHotState) CircuitBreaker() hotstate.CircuitBreakerChecker {
 	return &prefixedCircuitBreaker{
 		inner:  p.inner.CircuitBreaker(),
 		prefix: p.prefix,
-		client: p.inner.Client(),
+		client: p.rdb,
 	}
 }
 
 // Stats
 
 func (p *PrefixedHotState) IncrStats(ctx context.Context, bucket string, counters map[string]int64) error {
-	client := p.inner.Client()
+	client := p.rdb
 	pipe := client.Pipeline()
 
 	for name, delta := range counters {
@@ -228,7 +232,7 @@ func (p *PrefixedHotState) AddToHLL(ctx context.Context, key string, values ...s
 		return nil
 	}
 
-	client := p.inner.Client()
+	client := p.rdb
 	fullKey := p.prefixKey("hll:" + key)
 
 	args := make([]interface{}, len(values))
@@ -244,7 +248,7 @@ func (p *PrefixedHotState) AddToHLL(ctx context.Context, key string, values ...s
 }
 
 func (p *PrefixedHotState) GetStats(ctx context.Context, from, to time.Time) (*domain.Stats, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	stats := &domain.Stats{}
 
 	// Generate all bucket keys in the time range (hourly buckets)
@@ -308,7 +312,7 @@ func (p *PrefixedHotState) GetStats(ctx context.Context, from, to time.Time) (*d
 // Idempotency
 
 func (p *PrefixedHotState) CheckAndSetProcessed(ctx context.Context, webhookID domain.WebhookID, attempt int, ttl time.Duration) (bool, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey(fmt.Sprintf("processed:%s:%d", webhookID, attempt))
 	return client.SetNX(ctx, key, "1", ttl).Result()
 }
@@ -316,19 +320,19 @@ func (p *PrefixedHotState) CheckAndSetProcessed(ctx context.Context, webhookID d
 // Script operations
 
 func (p *PrefixedHotState) GetScript(ctx context.Context, configID domain.ConfigID) (string, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("script:" + string(configID))
 	return client.Get(ctx, key).Result()
 }
 
 func (p *PrefixedHotState) SetScript(ctx context.Context, configID domain.ConfigID, scriptJSON string, ttl time.Duration) error {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("script:" + string(configID))
 	return client.Set(ctx, key, scriptJSON, ttl).Err()
 }
 
 func (p *PrefixedHotState) DeleteScript(ctx context.Context, configID domain.ConfigID) error {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("script:" + string(configID))
 	return client.Del(ctx, key).Err()
 }
@@ -340,7 +344,7 @@ func (p *PrefixedHotState) Ping(ctx context.Context) error {
 }
 
 func (p *PrefixedHotState) FlushForRebuild(ctx context.Context) error {
-	client := p.inner.Client()
+	client := p.rdb
 
 	// Scan for all keys with our prefix and delete them
 	pattern := p.prefix + "*"
@@ -365,13 +369,9 @@ func (p *PrefixedHotState) Close() error {
 	return p.inner.Close()
 }
 
-func (p *PrefixedHotState) Client() *redis.Client {
-	return p.inner.Client()
-}
-
 // IncrInflight atomically increments the in-flight counter for an endpoint.
 func (p *PrefixedHotState) IncrInflight(ctx context.Context, endpointHash domain.EndpointHash, ttl time.Duration) (int64, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("concurrency:" + string(endpointHash))
 
 	pipe := client.Pipeline()
@@ -386,7 +386,7 @@ func (p *PrefixedHotState) IncrInflight(ctx context.Context, endpointHash domain
 
 // DecrInflight atomically decrements the in-flight counter for an endpoint.
 func (p *PrefixedHotState) DecrInflight(ctx context.Context, endpointHash domain.EndpointHash) error {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("concurrency:" + string(endpointHash))
 
 	script := redis.NewScript(`
@@ -404,20 +404,20 @@ func (p *PrefixedHotState) DecrInflight(ctx context.Context, endpointHash domain
 // Canary operations
 
 func (p *PrefixedHotState) CheckCanary(ctx context.Context) (bool, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("system:canary")
 	exists, err := client.Exists(ctx, key).Result()
 	return exists > 0, err
 }
 
 func (p *PrefixedHotState) SetCanary(ctx context.Context) error {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("system:canary")
 	return client.Set(ctx, key, "1", 0).Err()
 }
 
 func (p *PrefixedHotState) DelCanary(ctx context.Context) error {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("system:canary")
 	return client.Del(ctx, key).Err()
 }
@@ -445,7 +445,7 @@ func (p *PrefixedHotState) WaitForCanary(ctx context.Context, timeout time.Durat
 // SystemEpoch operations
 
 func (p *PrefixedHotState) GetEpoch(ctx context.Context) (*domain.SystemEpoch, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("system:epoch")
 
 	data, err := client.Get(ctx, key).Bytes()
@@ -464,7 +464,7 @@ func (p *PrefixedHotState) GetEpoch(ctx context.Context) (*domain.SystemEpoch, e
 }
 
 func (p *PrefixedHotState) SetEpoch(ctx context.Context, epoch *domain.SystemEpoch) error {
-	client := p.inner.Client()
+	client := p.rdb
 	key := p.prefixKey("system:epoch")
 
 	data, err := defaultMarshal(epoch)
@@ -475,7 +475,7 @@ func (p *PrefixedHotState) SetEpoch(ctx context.Context, epoch *domain.SystemEpo
 }
 
 func (p *PrefixedHotState) GetRetryQueueSize(ctx context.Context) (int64, error) {
-	client := p.inner.Client()
+	client := p.rdb
 	retryQueueKey := p.prefixKey("retries")
 	return client.ZCard(ctx, retryQueueKey).Result()
 }
@@ -483,7 +483,7 @@ func (p *PrefixedHotState) GetRetryQueueSize(ctx context.Context) (int64, error)
 // AcquireReconcilerLock attempts to acquire a distributed lock for reconciliation.
 // Returns true if lock acquired, and an unlock function to release it.
 func (p *PrefixedHotState) AcquireReconcilerLock(ctx context.Context, ttl time.Duration) (bool, func()) {
-	client := p.inner.Client()
+	client := p.rdb
 	lockKey := p.prefixKey("reconciler:lock")
 	instanceID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix())
 
