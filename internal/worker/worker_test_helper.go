@@ -17,10 +17,6 @@ func (w *Worker) ProcessMessage(ctx context.Context, msg *broker.Message) error 
 }
 
 // RunConcurrencyGate exports the private runConcurrencyGate for unit testing.
-// Using a capitalised alias keeps the internal concurrencyGate type unexported
-// while allowing tests to exercise the helper in isolation.
-type ConcurrencyGate = concurrencyGate
-
 func (w *Worker) RunConcurrencyGate(
 	ctx context.Context,
 	webhook *domain.Webhook,
