@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"time"
+
+	"github.com/oklog/ulid/v2"
 )
 
 // WebhookID is a ULID-based unique identifier
@@ -119,6 +122,73 @@ type Stats struct {
 func HashEndpoint(endpoint string) EndpointHash {
 	h := sha256.Sum256([]byte(endpoint))
 	return EndpointHash(hex.EncodeToString(h[:16])) // 32 chars
+}
+
+// MatchesDomain reports whether hostname matches pattern using the same rules
+// applied by both the HTTP module allowlist and the transformer domain list:
+//
+//   - "*"            — matches any hostname (global wildcard)
+//   - "*.example.com" — matches any subdomain of example.com, case-insensitive
+//   - "api.example.com" — exact match, case-insensitive
+//
+// This is the single canonical implementation; callers in internal/script/modules
+// and internal/transformer delegate here to keep the matching behaviour identical.
+func MatchesDomain(hostname, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*.") {
+		// Remove the leading "*", keep the dot so we match ".example.com".
+		suffix := pattern[1:]
+		return strings.EqualFold(hostname, pattern[2:]) ||
+			strings.HasSuffix(strings.ToLower(hostname), strings.ToLower(suffix))
+	}
+	return strings.EqualFold(hostname, pattern)
+}
+
+// defaultMaxAttempts is the retry budget applied when callers pass MaxAttempts <= 0.
+const defaultMaxAttempts = 20
+
+// NewWebhookOpts carries the caller-supplied fields for NewWebhook.
+// Zero values produce sensible defaults: MaxAttempts → 20, Attempt → 0,
+// CreatedAt/ScheduledAt → time.Now().
+type NewWebhookOpts struct {
+	ConfigID       ConfigID
+	Endpoint       string
+	Payload        json.RawMessage
+	Headers        map[string]string
+	IdempotencyKey string
+	SigningSecret  string
+	ScriptHash     string
+	MaxAttempts    int
+}
+
+// NewWebhook constructs a Webhook with a fresh ULID identifier, a consistent
+// EndpointHash, and delivery defaults (Attempt=0, MaxAttempts=20).  It is the
+// single canonical place for Webhook construction so that field population
+// remains consistent across the API server and the transformer engine.
+func NewWebhook(opts NewWebhookOpts) *Webhook {
+	maxAttempts := opts.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+
+	now := time.Now()
+	return &Webhook{
+		ID:             WebhookID("wh_" + ulid.Make().String()),
+		ConfigID:       opts.ConfigID,
+		Endpoint:       opts.Endpoint,
+		EndpointHash:   HashEndpoint(opts.Endpoint),
+		Payload:        opts.Payload,
+		Headers:        opts.Headers,
+		IdempotencyKey: opts.IdempotencyKey,
+		SigningSecret:  opts.SigningSecret,
+		ScriptHash:     opts.ScriptHash,
+		Attempt:        0,
+		MaxAttempts:    maxAttempts,
+		CreatedAt:      now,
+		ScheduledAt:    now,
+	}
 }
 
 // IsRetryable returns whether a status code indicates a retryable failure

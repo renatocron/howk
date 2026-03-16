@@ -14,8 +14,8 @@ type DepHealth struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// dependenciesCheck checks health of external dependencies like Redis and Kafka
-func (s *Server) dependenciesCheck(c *gin.Context) {
+// handleDependenciesCheck checks health of external dependencies like Redis and Kafka
+func (s *Server) handleDependenciesCheck(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 

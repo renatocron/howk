@@ -487,7 +487,7 @@ func TestWorkerWithScriptConsumer_Option(t *testing.T) {
 	// Construct a ScriptConsumer stand-in via the real constructor with a nil broker;
 	// we only need a non-nil pointer to verify the option wiring -- not to start it.
 	// Use a real (but inert) ScriptConsumer constructed with a mock broker.
-	dummyConsumer := script.NewScriptConsumer(mockBroker, testScriptLoader, mockHotState, "test.scripts", "test-group", 24*time.Hour)
+	dummyConsumer := script.NewConsumer(mockBroker, testScriptLoader, mockHotState, "test.scripts", "test-group", 24*time.Hour)
 
 	w := worker.NewWorker(
 		cfg,

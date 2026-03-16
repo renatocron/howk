@@ -10,7 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func (s *Server) enqueueWebhook(c *gin.Context) {
+func (s *Server) handleEnqueueWebhook(c *gin.Context) {
 	configID := c.Param("config")
 
 	var req EnqueueRequest
@@ -22,7 +22,7 @@ func (s *Server) enqueueWebhook(c *gin.Context) {
 	s.processEnqueue(c, configID, []EnqueueRequest{req})
 }
 
-func (s *Server) enqueueWebhookBatch(c *gin.Context) {
+func (s *Server) handleEnqueueWebhookBatch(c *gin.Context) {
 	configID := c.Param("config")
 
 	var req BatchEnqueueRequest
@@ -67,7 +67,9 @@ func (s *Server) processEnqueue(c *gin.Context, configID string, reqs []EnqueueR
 			State:     domain.StatePending,
 			Attempts:  0,
 		}
-		s.hotstate.SetStatus(ctx, status)
+		if err := s.hotstate.SetStatus(ctx, status); err != nil {
+			log.Warn().Err(err).Str("webhook_id", string(webhook.ID)).Msg("failed to set initial webhook status")
+		}
 
 		responses = append(responses, EnqueueResponse{
 			WebhookID: string(webhook.ID),
@@ -103,7 +105,7 @@ func (s *Server) processEnqueue(c *gin.Context, configID string, reqs []EnqueueR
 	}
 }
 
-func (s *Server) getStatus(c *gin.Context) {
+func (s *Server) handleGetStatus(c *gin.Context) {
 	webhookID := c.Param("webhook_id")
 
 	status, err := s.hotstate.GetStatus(c.Request.Context(), domain.WebhookID(webhookID))

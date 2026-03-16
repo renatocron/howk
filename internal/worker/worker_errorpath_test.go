@@ -749,7 +749,7 @@ func TestHandleScriptError_SyntaxError(t *testing.T) {
 
 	wh := webhookWithScript("syntax-hash")
 	// Register a syntactically broken script.
-	loader.SetScript(&script.ScriptConfig{
+	loader.SetScript(&script.Config{
 		ConfigID: wh.ConfigID,
 		LuaCode:  "this is not valid lua @@@",
 		Hash:     "syntax-hash",
@@ -781,7 +781,7 @@ func TestHandleScriptError_RuntimeError(t *testing.T) {
 
 	wh := webhookWithScript("runtime-hash")
 	// Script that compiles but errors at runtime.
-	loader.SetScript(&script.ScriptConfig{
+	loader.SetScript(&script.Config{
 		ConfigID: wh.ConfigID,
 		LuaCode:  `error("deliberate runtime error")`,
 		Hash:     "runtime-hash",
@@ -831,7 +831,7 @@ func TestHandleScriptError_Timeout(t *testing.T) {
 
 	wh := webhookWithScript("timeout-hash")
 	// Infinite loop that will time out.
-	loader.SetScript(&script.ScriptConfig{
+	loader.SetScript(&script.Config{
 		ConfigID: wh.ConfigID,
 		LuaCode:  `while true do end`,
 		Hash:     "timeout-hash",
@@ -863,7 +863,7 @@ func TestHandleScriptError_SuccessfulScript(t *testing.T) {
 
 	wh := webhookWithScript("good-hash")
 	// Script that succeeds and sets a transformed body.
-	loader.SetScript(&script.ScriptConfig{
+	loader.SetScript(&script.Config{
 		ConfigID: wh.ConfigID,
 		LuaCode:  `request.body = '{"transformed":true}'`,
 		Hash:     "good-hash",

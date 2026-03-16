@@ -23,7 +23,7 @@ type MockPublisher struct {
 	mock.Mock
 }
 
-func (m *MockPublisher) PublishScript(ctx context.Context, s *script.ScriptConfig) error {
+func (m *MockPublisher) PublishScript(ctx context.Context, s *script.Config) error {
 	args := m.Called(ctx, s)
 	return args.Error(0)
 }

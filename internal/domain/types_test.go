@@ -1,10 +1,14 @@
 package domain_test
 
 import (
+    "encoding/json"
+    "strings"
     "testing"
+    "time"
 
     "github.com/howk/howk/internal/domain"
     "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
 )
 
 func TestHashEndpoint(t *testing.T) {
@@ -138,4 +142,124 @@ func TestWebhookID_String(t *testing.T) {
 func TestEndpointHash_String(t *testing.T) {
     hash := domain.EndpointHash("abc123hash")
     assert.Equal(t, "abc123hash", string(hash))
+}
+
+// --- NewWebhook ---
+
+func TestNewWebhook_DefaultMaxAttempts(t *testing.T) {
+    wh := domain.NewWebhook(domain.NewWebhookOpts{
+        ConfigID:  "cfg-1",
+        Endpoint:  "https://example.com/hook",
+        Payload:   json.RawMessage(`{}`),
+        // MaxAttempts omitted → should default to 20
+    })
+
+    require.NotNil(t, wh)
+    assert.Equal(t, 20, wh.MaxAttempts)
+}
+
+func TestNewWebhook_ExplicitMaxAttempts(t *testing.T) {
+    wh := domain.NewWebhook(domain.NewWebhookOpts{
+        ConfigID:    "cfg-1",
+        Endpoint:    "https://example.com/hook",
+        Payload:     json.RawMessage(`{}`),
+        MaxAttempts: 5,
+    })
+
+    assert.Equal(t, 5, wh.MaxAttempts)
+}
+
+func TestNewWebhook_ZeroMaxAttemptsDefaultsTo20(t *testing.T) {
+    wh := domain.NewWebhook(domain.NewWebhookOpts{
+        ConfigID:    "cfg-1",
+        Endpoint:    "https://example.com/hook",
+        Payload:     json.RawMessage(`{}`),
+        MaxAttempts: 0, // explicit zero → default
+    })
+
+    assert.Equal(t, 20, wh.MaxAttempts)
+}
+
+func TestNewWebhook_IDPrefixAndUniqueness(t *testing.T) {
+    wh1 := domain.NewWebhook(domain.NewWebhookOpts{Endpoint: "https://a.com"})
+    wh2 := domain.NewWebhook(domain.NewWebhookOpts{Endpoint: "https://a.com"})
+
+    assert.True(t, strings.HasPrefix(string(wh1.ID), "wh_"), "ID must start with wh_")
+    assert.NotEqual(t, wh1.ID, wh2.ID, "Two consecutive NewWebhook calls must produce unique IDs")
+}
+
+func TestNewWebhook_EndpointHashPopulated(t *testing.T) {
+    endpoint := "https://example.com/hook"
+    wh := domain.NewWebhook(domain.NewWebhookOpts{Endpoint: endpoint})
+
+    assert.Equal(t, domain.HashEndpoint(endpoint), wh.EndpointHash)
+}
+
+func TestNewWebhook_AttemptIsZero(t *testing.T) {
+    wh := domain.NewWebhook(domain.NewWebhookOpts{Endpoint: "https://example.com"})
+    assert.Equal(t, 0, wh.Attempt)
+}
+
+func TestNewWebhook_TimestampsAreRecent(t *testing.T) {
+    before := time.Now()
+    wh := domain.NewWebhook(domain.NewWebhookOpts{Endpoint: "https://example.com"})
+    after := time.Now()
+
+    assert.True(t, !wh.CreatedAt.Before(before) && !wh.CreatedAt.After(after),
+        "CreatedAt should be between before and after")
+    assert.Equal(t, wh.CreatedAt, wh.ScheduledAt,
+        "CreatedAt and ScheduledAt should be equal on construction")
+}
+
+func TestNewWebhook_OptionalFieldsPreserved(t *testing.T) {
+    headers := map[string]string{"X-Custom": "value"}
+    wh := domain.NewWebhook(domain.NewWebhookOpts{
+        ConfigID:       "cfg-abc",
+        Endpoint:       "https://example.com",
+        Payload:        json.RawMessage(`{"event":"test"}`),
+        Headers:        headers,
+        IdempotencyKey: "idem-key-123",
+        SigningSecret:  "s3cr3t",
+        ScriptHash:     "deadbeef",
+    })
+
+    assert.Equal(t, domain.ConfigID("cfg-abc"), wh.ConfigID)
+    assert.Equal(t, headers, wh.Headers)
+    assert.Equal(t, "idem-key-123", wh.IdempotencyKey)
+    assert.Equal(t, "s3cr3t", wh.SigningSecret)
+    assert.Equal(t, "deadbeef", wh.ScriptHash)
+}
+
+// --- MatchesDomain ---
+
+func TestMatchesDomain_WildcardAll(t *testing.T) {
+    assert.True(t, domain.MatchesDomain("any.host.example.com", "*"))
+    assert.True(t, domain.MatchesDomain("localhost", "*"))
+}
+
+func TestMatchesDomain_ExactMatch(t *testing.T) {
+    assert.True(t, domain.MatchesDomain("api.example.com", "api.example.com"))
+    assert.False(t, domain.MatchesDomain("api.example.com", "other.example.com"))
+}
+
+func TestMatchesDomain_ExactMatchCaseInsensitive(t *testing.T) {
+    assert.True(t, domain.MatchesDomain("API.EXAMPLE.COM", "api.example.com"))
+    assert.True(t, domain.MatchesDomain("api.example.com", "API.EXAMPLE.COM"))
+}
+
+func TestMatchesDomain_WildcardSubdomain(t *testing.T) {
+    assert.True(t, domain.MatchesDomain("foo.example.com", "*.example.com"))
+    assert.True(t, domain.MatchesDomain("bar.example.com", "*.example.com"))
+    // Deep subdomain should also match
+    assert.True(t, domain.MatchesDomain("deep.sub.example.com", "*.example.com"))
+}
+
+func TestMatchesDomain_WildcardSubdomainNoMatch(t *testing.T) {
+    assert.False(t, domain.MatchesDomain("other.com", "*.example.com"))
+    assert.False(t, domain.MatchesDomain("notexample.com", "*.example.com"))
+}
+
+func TestMatchesDomain_WildcardSubdomainCaseInsensitive(t *testing.T) {
+    assert.True(t, domain.MatchesDomain("FOO.EXAMPLE.COM", "*.example.com"))
+    assert.True(t, domain.MatchesDomain("foo.example.com", "*.EXAMPLE.COM"))
 }

@@ -13,25 +13,25 @@ import (
 
 // CompiledScript represents a pre-compiled Lua script
 type CompiledScript struct {
-	Config       *ScriptConfig
+	Config       *Config
 	CompiledCode *lua.FunctionProto
 }
 
 // Loader loads and caches scripts from Kafka/Redis
 type Loader struct {
 	mu      sync.RWMutex
-	scripts map[domain.ConfigID]*ScriptConfig
+	scripts map[domain.ConfigID]*Config
 }
 
 // NewLoader creates a new script loader
 func NewLoader() *Loader {
 	return &Loader{
-		scripts: make(map[domain.ConfigID]*ScriptConfig),
+		scripts: make(map[domain.ConfigID]*Config),
 	}
 }
 
 // GetScript retrieves a script by config ID
-func (l *Loader) GetScript(configID domain.ConfigID) (*ScriptConfig, error) {
+func (l *Loader) GetScript(configID domain.ConfigID) (*Config, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -57,7 +57,7 @@ func (l *Loader) GetScriptHash(configID domain.ConfigID) (string, error) {
 }
 
 // SetScript stores or updates a script in the cache
-func (l *Loader) SetScript(script *ScriptConfig) {
+func (l *Loader) SetScript(script *Config) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -72,9 +72,9 @@ func (l *Loader) DeleteScript(configID domain.ConfigID) {
 	delete(l.scripts, configID)
 }
 
-// LoadFromJSON loads a script from JSON-encoded ScriptConfig
+// LoadFromJSON loads a script from JSON-encoded Config
 func (l *Loader) LoadFromJSON(configID domain.ConfigID, scriptJSON string) error {
-	var script ScriptConfig
+	var script Config
 	if err := json.Unmarshal([]byte(scriptJSON), &script); err != nil {
 		return fmt.Errorf("unmarshal script config: %w", err)
 	}

@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -124,7 +123,10 @@ func (e *Engine) Execute(
 	// Wait for result or timeout
 	select {
 	case <-timeoutCtx.Done():
-		return nil, fmt.Errorf("script execution exceeded timeout of %v", e.cfg.Timeout)
+		return nil, &TransformerError{
+			Kind:    ErrorKindTimeout,
+			Message: fmt.Sprintf("script execution exceeded timeout of %v", e.cfg.Timeout),
+		}
 	case err := <-errCh:
 		return nil, err
 	case result := <-resultCh:
@@ -177,15 +179,27 @@ func (e *Engine) executeScript(
 	// Execute script
 	fn, err := L.LoadString(script.LuaCode)
 	if err != nil {
-		return nil, fmt.Errorf("lua syntax error: %w", err)
+		return nil, &TransformerError{
+			Kind:    ErrorKindSyntax,
+			Message: "lua syntax error",
+			Cause:   err,
+		}
 	}
 
 	L.Push(fn)
 	if err := L.PCall(0, 0, nil); err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, &TransformerError{
+				Kind:    ErrorKindTimeout,
+				Message: "script interrupted by context",
+				Cause:   ctx.Err(),
+			}
 		}
-		return nil, fmt.Errorf("lua runtime error: %w", err)
+		return nil, &TransformerError{
+			Kind:    ErrorKindRuntime,
+			Message: "lua runtime error",
+			Cause:   err,
+		}
 	}
 
 	return result, nil
@@ -247,26 +261,22 @@ func (e *Engine) makePostFn(script *TransformerScript, result *ExecutionResult) 
 			return 2
 		}
 
-		// Create webhook
-		webhookID := domain.WebhookID("wh_" + ulid.Make().String())
+		// Create webhook using the canonical constructor so field population is
+		// consistent with the API server path.
 		configID := domain.ConfigID(opts.ConfigID)
 		if configID == "" {
 			configID = domain.ConfigID(script.Name) // Default to script name
 		}
 
-		webhook := &domain.Webhook{
-			ID:             webhookID,
-			ConfigID:       configID,
-			Endpoint:       endpoint,
-			EndpointHash:   domain.HashEndpoint(endpoint),
-			Payload:        json.RawMessage(payload),
-			Headers:        opts.Headers,
-			SigningSecret:  opts.SigningSecret,
-			Attempt:        0,
-			MaxAttempts:    opts.MaxAttempts,
-			CreatedAt:      time.Now(),
-			ScheduledAt:    time.Now(),
-		}
+		webhook := domain.NewWebhook(domain.NewWebhookOpts{
+			ConfigID:      configID,
+			Endpoint:      endpoint,
+			Payload:       json.RawMessage(payload),
+			Headers:       opts.Headers,
+			SigningSecret: opts.SigningSecret,
+			MaxAttempts:   opts.MaxAttempts,
+		})
+		webhookID := webhook.ID
 
 		// Publish to Kafka
 		ctx := context.Background()
@@ -332,24 +342,16 @@ func (e *Engine) validateDomain(endpoint string, scriptConfig map[string]any) er
 		return fmt.Errorf("allowed_domains must be an array")
 	}
 
-	// Check if host is in allowed list
+	// Check if host is in allowed list.
+	// domain.MatchesDomain is the single canonical wildcard-matching function
+	// shared with the HTTP module allowlist.
 	for _, domainRaw := range allowedDomains {
-		domain, ok := domainRaw.(string)
+		pattern, ok := domainRaw.(string)
 		if !ok {
 			continue
 		}
-
-		// Exact match
-		if host == domain {
+		if domain.MatchesDomain(host, pattern) {
 			return nil
-		}
-
-		// Subdomain match: *.example.com matches foo.example.com
-		if len(domain) > 2 && domain[0] == '*' && domain[1] == '.' {
-			suffix := domain[1:] // Keep the dot
-			if len(host) > len(suffix) && host[len(host)-len(suffix):] == suffix {
-				return nil
-			}
 		}
 	}
 

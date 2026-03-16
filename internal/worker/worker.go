@@ -29,7 +29,7 @@ type Worker struct {
 	domainLimiter  delivery.DomainLimiter
 	retry          retry.Retrier
 	scriptEngine   *script.Engine
-	scriptConsumer *script.ScriptConsumer
+	scriptConsumer *script.Consumer
 }
 
 // WorkerOption is a functional option for configuring a Worker at construction time.
@@ -37,10 +37,10 @@ type Worker struct {
 // to invoke setters before Run().
 type WorkerOption func(*Worker)
 
-// WithScriptConsumer injects a ScriptConsumer into the Worker at construction time.
+// WithScriptConsumer injects a script.Consumer into the Worker at construction time.
 // This is the preferred way to wire up script synchronization; it avoids the
-// post-construction SetScriptConsumer call that could silently be forgotten.
-func WithScriptConsumer(consumer *script.ScriptConsumer) WorkerOption {
+// post-construction setter call that could silently be forgotten.
+func WithScriptConsumer(consumer *script.Consumer) WorkerOption {
 	return func(w *Worker) {
 		w.scriptConsumer = consumer
 	}
@@ -76,9 +76,9 @@ func NewWorker(
 	return w
 }
 
-// GetScriptConsumer returns the script consumer. Used by the process owner for
+// GetScriptConsumer returns the script.Consumer. Used by the process owner for
 // graceful shutdown sequencing.
-func (w *Worker) GetScriptConsumer() *script.ScriptConsumer {
+func (w *Worker) GetScriptConsumer() *script.Consumer {
 	return w.scriptConsumer
 }
 
@@ -142,40 +142,32 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		logger.Debug().Msg("Probe request (circuit half-open)")
 	}
 
-	// Check domain-level concurrency (NEW)
-	domainAcquired := false
-	if w.domainLimiter != nil {
-		acquired, err := w.domainLimiter.TryAcquire(ctx, webhook.Endpoint)
-		if err != nil {
-			logger.Warn().Err(err).Msg("Domain limiter check failed, proceeding")
-			// On error, proceed (fail-open)
-		} else if !acquired {
-			// Domain at capacity
-			if isSlowLane {
-				// Already in slow lane and still over threshold - NACK for retry
-				logger.Info().
-					Str("endpoint", webhook.Endpoint).
-					Msg("Domain concurrency limit reached even in slow lane, NACKing for retry")
-				return fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint)
-			}
-
-			logger.Info().
-				Str("endpoint", webhook.Endpoint).
-				Msg("Domain concurrency limit reached, diverting to slow lane")
-
-			if err := w.publisher.PublishToSlow(ctx, &webhook); err != nil {
-				logger.Error().Err(err).Msg("Failed to divert to slow lane, proceeding with delivery")
-				// Fail-open: proceed with delivery
-			} else {
-				w.recordStats(ctx, "diverted", &webhook)
-				return nil // Successfully diverted
-			}
-		} else {
-			domainAcquired = true
+	// Check domain-level concurrency.
+	// runConcurrencyGate encapsulates the acquire→divert-or-NACK pattern used by
+	// both the domain limiter and the inflight counter; see its definition below.
+	domainAcquired, err := w.runConcurrencyGate(ctx, &webhook, isSlowLane, concurrencyGate{
+		// active guards against a nil domainLimiter so the gate is a no-op when absent
+		active: w.domainLimiter != nil,
+		tryAcquire: func() (bool, error) {
+			return w.domainLimiter.TryAcquire(ctx, webhook.Endpoint)
+		},
+		release: func() error {
+			return w.domainLimiter.Release(ctx, webhook.Endpoint)
+		},
+		// Domain gate has no fail-open re-acquire; if divert fails we proceed without re-taking the slot.
+		reacquireOnDivertFail: nil,
+		nackErr:    fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint),
+		logDivert:  "Domain concurrency limit reached, diverting to slow lane",
+		logSatured: "Domain concurrency limit reached even in slow lane, NACKing for retry",
+	})
+	if err != nil {
+		// err is either the NACK sentinel or the gated divert-succeeded signal
+		if err == errDiverted {
+			w.recordStats(ctx, "diverted", &webhook)
+			return nil
 		}
+		return err
 	}
-
-	// Ensure domain release is called on all exit paths after we acquire
 	defer func() {
 		if domainAcquired && w.domainLimiter != nil {
 			if err := w.domainLimiter.Release(ctx, webhook.Endpoint); err != nil {
@@ -184,47 +176,41 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		}
 	}()
 
-	// Check in-flight concurrency (penalty box gate)
-	inflightAcquired := false
-	inflightCount, err := w.hotstate.IncrInflight(ctx, webhook.EndpointHash, w.config.Concurrency.InflightTTL)
-	if err != nil {
-		logger.Warn().Err(err).Msg("Concurrency check failed, proceeding with delivery")
-		// On Redis failure, proceed normally (fail-open)
-	} else if inflightCount > int64(w.config.Concurrency.MaxInflightPerEndpoint) {
-		// Over threshold: decrement (we just incremented) and handle based on lane
-		w.hotstate.DecrInflight(ctx, webhook.EndpointHash)
-
-		if isSlowLane {
-			// We're already in the slow lane and still over threshold.
-			// Return error to NACK the message and let Kafka's consumer backoff handle the wait.
-			// This prevents an infinite loop of read->divert->read.
-			logger.Info().
-				Int64("inflight", inflightCount).
-				Int("threshold", w.config.Concurrency.MaxInflightPerEndpoint).
-				Msg("Endpoint saturated even in slow lane, NACKing for retry")
-			return fmt.Errorf("endpoint saturated in slow lane: inflight=%d, threshold=%d", inflightCount, w.config.Concurrency.MaxInflightPerEndpoint)
-		}
-
-		logger.Info().
-			Int64("inflight", inflightCount).
-			Int("threshold", w.config.Concurrency.MaxInflightPerEndpoint).
-			Msg("Endpoint over concurrency threshold, diverting to slow lane")
-
-		if err := w.publisher.PublishToSlow(ctx, &webhook); err != nil {
-			logger.Error().Err(err).Msg("Failed to divert to slow lane, proceeding with delivery")
-			// Fail-open: re-increment and deliver normally
+	// Check in-flight concurrency (penalty box gate).
+	inflightAcquired, err := w.runConcurrencyGate(ctx, &webhook, isSlowLane, concurrencyGate{
+		active: true,
+		tryAcquire: func() (bool, error) {
+			count, err := w.hotstate.IncrInflight(ctx, webhook.EndpointHash, w.config.Concurrency.InflightTTL)
+			if err != nil {
+				return false, err
+			}
+			if count > int64(w.config.Concurrency.MaxInflightPerEndpoint) {
+				// Undo the increment; the gate will handle the divert/NACK path.
+				w.hotstate.DecrInflight(ctx, webhook.EndpointHash)
+				return false, nil
+			}
+			return true, nil
+		},
+		release: func() error {
+			return w.hotstate.DecrInflight(ctx, webhook.EndpointHash)
+		},
+		// Fail-open: if PublishToSlow fails, re-acquire the inflight slot so the
+		// deferred release remains balanced.
+		reacquireOnDivertFail: func() {
 			w.hotstate.IncrInflight(ctx, webhook.EndpointHash, w.config.Concurrency.InflightTTL)
-			inflightAcquired = true
-		} else {
+		},
+		nackErr: fmt.Errorf("endpoint saturated in slow lane: threshold=%d",
+			w.config.Concurrency.MaxInflightPerEndpoint),
+		logDivert:  "Endpoint over concurrency threshold, diverting to slow lane",
+		logSatured: "Endpoint saturated even in slow lane, NACKing for retry",
+	})
+	if err != nil {
+		if err == errDiverted {
 			w.recordStats(ctx, "diverted", &webhook)
-			return nil // Successfully diverted
+			return nil
 		}
-	} else {
-		// Track that we own an inflight slot from this point
-		inflightAcquired = true
+		return err
 	}
-
-	// Ensure DECR is called on all exit paths after we acquire an inflight slot
 	defer func() {
 		if inflightAcquired {
 			if err := w.hotstate.DecrInflight(ctx, webhook.EndpointHash); err != nil {
@@ -249,7 +235,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		scriptJSON, err := w.hotstate.GetScript(ctx, webhook.ConfigID)
 		if err == nil && scriptJSON != "" {
 			// Parse and load into script engine's loader
-			var scriptConfig script.ScriptConfig
+			var scriptConfig script.Config
 			if err := json.Unmarshal([]byte(scriptJSON), &scriptConfig); err == nil {
 				w.scriptEngine.GetLoader().SetScript(&scriptConfig)
 				logger.Debug().
@@ -304,7 +290,10 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 			Msg("Delivery succeeded")
 
 		// Record success with circuit breaker
-		cb, _ := w.circuit.RecordSuccess(ctx, webhook.EndpointHash)
+		cb, err := w.circuit.RecordSuccess(ctx, webhook.EndpointHash)
+		if err != nil {
+			logger.Warn().Err(err).Msg("failed to record circuit success")
+		}
 		if cb != nil && cb.State == domain.CircuitClosed {
 			logger.Debug().Msg("Circuit closed")
 		}
@@ -337,7 +326,10 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		Msg("Delivery failed")
 
 	// Record failure with circuit breaker
-	cb, _ := w.circuit.RecordFailure(ctx, webhook.EndpointHash)
+	cb, err := w.circuit.RecordFailure(ctx, webhook.EndpointHash)
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to record circuit failure")
+	}
 	circuitState := domain.CircuitClosed
 	if cb != nil {
 		circuitState = cb.State
@@ -701,6 +693,90 @@ func (w *Worker) sendToDLQ(ctx context.Context, webhook *domain.Webhook, reasonT
 
 	logger.Warn().Msg("Webhook sent to dead letter queue")
 	return nil
+}
+
+// errDiverted is a sentinel error returned by runConcurrencyGate when the
+// webhook was successfully forwarded to the slow lane.  Callers should record
+// stats and return nil to ACK the original message.
+var errDiverted = fmt.Errorf("diverted to slow lane")
+
+// concurrencyGate holds the callbacks and metadata for one concurrency gate
+// (domain limiter or inflight counter).  Both gates share the same acquire →
+// divert-or-NACK logic, differing only in how the slot is acquired/released
+// and whether a fail-open re-acquire is needed.
+type concurrencyGate struct {
+	// active skips the gate entirely when false (e.g. no domain limiter configured).
+	active bool
+
+	// tryAcquire attempts to claim a slot.  Returns (true, nil) on success,
+	// (false, nil) when at capacity, or (false, err) on infrastructure failure
+	// (treated as fail-open: proceed without a slot).
+	tryAcquire func() (bool, error)
+
+	// release frees the slot on all exit paths after a successful acquire.
+	release func() error
+
+	// reacquireOnDivertFail is called when PublishToSlow fails so the deferred
+	// release remains balanced.  May be nil for gates that skip the re-acquire.
+	reacquireOnDivertFail func()
+
+	// nackErr is returned when the webhook is in the slow lane and still over
+	// threshold, signalling Kafka to redeliver after backoff.
+	nackErr error
+
+	// logDivert / logSatured are the log messages emitted before divert / NACK.
+	logDivert  string
+	logSatured string
+}
+
+// runConcurrencyGate executes the acquire→divert-or-NACK pattern for a single
+// concurrency gate.  It returns:
+//   - (true,  nil)          — slot acquired; caller must release via defer
+//   - (false, nil)          — gate inactive or infrastructure error (fail-open)
+//   - (false, errDiverted)  — message forwarded to slow lane; caller should return nil after recording stats
+//   - (false, nackErr)      — slow-lane saturation; caller must propagate the error to NACK
+func (w *Worker) runConcurrencyGate(
+	ctx context.Context,
+	webhook *domain.Webhook,
+	isSlowLane bool,
+	gate concurrencyGate,
+) (acquired bool, err error) {
+	if !gate.active {
+		return false, nil
+	}
+
+	ok, acquireErr := gate.tryAcquire()
+	if acquireErr != nil {
+		// Infrastructure failure → fail-open (proceed without holding a slot)
+		log.Warn().Err(acquireErr).Msg("Concurrency gate check failed, proceeding")
+		return false, nil
+	}
+
+	if ok {
+		return true, nil
+	}
+
+	// At capacity: divert or NACK depending on lane
+	if isSlowLane {
+		log.Info().Msg(gate.logSatured)
+		return false, gate.nackErr
+	}
+
+	log.Info().Msg(gate.logDivert)
+
+	if publishErr := w.publisher.PublishToSlow(ctx, webhook); publishErr != nil {
+		log.Error().Err(publishErr).Msg("Failed to divert to slow lane, proceeding with delivery")
+		// Fail-open: if a re-acquire func is provided, restore the slot so the
+		// deferred release in the caller stays balanced.
+		if gate.reacquireOnDivertFail != nil {
+			gate.reacquireOnDivertFail()
+			return true, nil
+		}
+		// No re-acquire needed; proceed without holding a slot.
+		return false, nil
+	}
+
+	return false, errDiverted
 }
 
 func (w *Worker) GetConfig() *config.Config {

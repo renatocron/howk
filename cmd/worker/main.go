@@ -138,7 +138,7 @@ func main() {
 	// WithScriptConsumer to avoid fragile post-construction setter calls.
 	var workerOpts []worker.WorkerOption
 	if cfg.Lua.Enabled {
-		scriptConsumer := script.NewScriptConsumer(
+		scriptConsumer := script.NewConsumer(
 			kafkaBroker,
 			scriptLoader,
 			hs,

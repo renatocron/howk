@@ -14,6 +14,8 @@ import (
 
 	lua "github.com/yuin/gopher-lua"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/howk/howk/internal/domain"
 )
 
 // HTTPResponse represents the result of an HTTP request
@@ -41,10 +43,15 @@ type HTTPModule struct {
 	cacheMu      sync.RWMutex
 }
 
-// cacheEntry stores a cached response
+// cacheEntry stores a cached response together with its per-entry TTL.
+// The TTL is set at write time (setCached) and honoured at read time
+// (getCached) so that per-request cache_ttl options take effect correctly.
+// Previously getCached used the module-level cacheTTL, causing a mismatch
+// when callers passed a different TTL to setCached.
 type cacheEntry struct {
-	response  *HTTPResponse
-	cachedAt  time.Time
+	response *HTTPResponse
+	cachedAt time.Time
+	ttl      time.Duration
 }
 
 // HTTPConfig holds configuration for the HTTP module
@@ -232,23 +239,13 @@ func (h *HTTPModule) validateHost(urlStr, namespace string) error {
 	return fmt.Errorf("host %q not in allowlist", host)
 }
 
-// isHostAllowed checks if a host matches any entry in the allowlist
+// isHostAllowed reports whether host matches any pattern in the allowlist.
+// Matching semantics are delegated to domain.MatchesDomain so behaviour is
+// identical to the transformer's domain validation.
 func isHostAllowed(host string, allowlist []string) bool {
-	for _, allowed := range allowlist {
-		// Allow wildcard "*" for all hosts
-		if allowed == "*" {
+	for _, pattern := range allowlist {
+		if domain.MatchesDomain(host, pattern) {
 			return true
-		}
-		// Exact match
-		if strings.EqualFold(host, allowed) {
-			return true
-		}
-		// Subdomain match: *.example.com matches foo.example.com
-		if strings.HasPrefix(allowed, "*.") {
-			suffix := allowed[1:] // Remove the * but keep the dot
-			if strings.HasSuffix(host, suffix) {
-				return true
-			}
 		}
 	}
 	return false
@@ -312,45 +309,48 @@ func (h *HTTPModule) buildCacheKey(method, namespace, urlStr string, headers map
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// getCached retrieves a cached response
+// getCached retrieves a cached response if it has not expired.
+// Expiry is evaluated against the TTL stored with the entry, not the global
+// cacheTTL, so per-request cache_ttl options are honoured correctly.
 func (h *HTTPModule) getCached(key string) *HTTPResponse {
 	h.cacheMu.RLock()
 	defer h.cacheMu.RUnlock()
-	
+
 	entry, ok := h.cache[key]
 	if !ok {
 		return nil
 	}
-	
-	// Check if expired
-	if time.Since(entry.cachedAt) > h.cacheTTL {
+
+	if time.Since(entry.cachedAt) > entry.ttl {
 		return nil
 	}
-	
+
 	return entry.response
 }
 
-// setCached stores a response in the cache
+// setCached stores a response in the cache with its per-entry TTL.
 func (h *HTTPModule) setCached(key string, resp *HTTPResponse, ttl time.Duration) {
 	h.cacheMu.Lock()
 	defer h.cacheMu.Unlock()
-	
+
 	h.cache[key] = &cacheEntry{
-		response:  resp,
-		cachedAt:  time.Now(),
+		response: resp,
+		cachedAt: time.Now(),
+		ttl:      ttl,
 	}
-	
+
 	// Simple cleanup: remove expired entries if cache is too large
 	if len(h.cache) > 1000 {
 		h.cleanupExpired()
 	}
 }
 
-// cleanupExpired removes expired entries from the cache
+// cleanupExpired removes expired entries from the cache.
+// Must be called with cacheMu held for writing.
 func (h *HTTPModule) cleanupExpired() {
 	now := time.Now()
 	for key, entry := range h.cache {
-		if now.Sub(entry.cachedAt) > h.cacheTTL {
+		if now.Sub(entry.cachedAt) > entry.ttl {
 			delete(h.cache, key)
 		}
 	}

@@ -187,7 +187,9 @@ func TestHandleIncoming_InvalidAuth(t *testing.T) {
 }
 
 // TestHandleIncoming_ScriptExecutionError verifies that a Lua runtime error
-// returns HTTP 500.
+// returns HTTP 422 (Unprocessable Entity) with a typed error message.
+// Runtime errors are user/operator faults (bad script logic) rather than
+// infrastructure failures, so 422 is more appropriate than 500.
 func TestHandleIncoming_ScriptExecutionError(t *testing.T) {
 	// Script that triggers a Lua runtime error: calling nil as a function.
 	brokenLua := `local x = nil; x()`
@@ -198,11 +200,11 @@ func TestHandleIncoming_ScriptExecutionError(t *testing.T) {
 		bytes.NewBufferString(`some-body`))
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 
 	var resp map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.Contains(t, resp["error"], "script execution failed")
+	assert.Contains(t, resp["error"], "script runtime error")
 }
 
 // TestHandleIncoming_Success verifies that a valid request to a no-op script

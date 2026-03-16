@@ -45,7 +45,7 @@ func TestLoader_LoadFromJSON_MissingRequiredFields(t *testing.T) {
 	loader := NewLoader()
 
 	// Valid JSON but missing required fields - this actually works because
-	// ScriptConfig fields are optional at the JSON level
+	// Config fields are optional at the JSON level
 	json := `{"config_id": "cfg_123"}`
 	err := loader.LoadFromJSON("cfg_123", json)
 	assert.NoError(t, err) // Loading succeeds even with partial data
@@ -83,7 +83,7 @@ func TestLoader_ConcurrentAccess(t *testing.T) {
 
 	// Pre-load some scripts
 	for i := 0; i < 10; i++ {
-		loader.SetScript(&ScriptConfig{
+		loader.SetScript(&Config{
 			ConfigID: domain.ConfigID("cfg_" + string(rune('0'+i))),
 			Hash:     "hash_" + string(rune('0'+i)),
 			LuaCode:  "print('hello ' + " + string(rune('0'+i)) + ")",
@@ -114,7 +114,7 @@ func TestLoader_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < iterations/2; j++ {
-				loader.SetScript(&ScriptConfig{
+				loader.SetScript(&Config{
 					ConfigID: domain.ConfigID("cfg_new_" + string(rune('0'+id))),
 					Hash:     "hash_new_" + string(rune('0'+j)),
 				})
@@ -197,11 +197,11 @@ func TestLoader_Count_Empty(t *testing.T) {
 func TestLoader_Count_AfterDelete(t *testing.T) {
 	loader := NewLoader()
 
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "cfg_1",
 		Hash:     "hash_1",
 	})
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "cfg_2",
 		Hash:     "hash_2",
 	})
@@ -224,7 +224,7 @@ func TestLoader_SetScript_Update(t *testing.T) {
 	loader := NewLoader()
 
 	// Set initial script
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "cfg_1",
 		Hash:     "hash_v1",
 		LuaCode:  "print('v1')",
@@ -235,7 +235,7 @@ func TestLoader_SetScript_Update(t *testing.T) {
 	assert.Equal(t, "hash_v1", script.Hash)
 
 	// Update same config ID
-	loader.SetScript(&ScriptConfig{
+	loader.SetScript(&Config{
 		ConfigID: "cfg_1",
 		Hash:     "hash_v2",
 		LuaCode:  "print('v2')",
@@ -259,7 +259,7 @@ func TestLoader_RaceDetector(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 1000; i++ {
-			loader.SetScript(&ScriptConfig{
+			loader.SetScript(&Config{
 				ConfigID: domain.ConfigID("cfg_race"),
 				Hash:     "hash",
 			})

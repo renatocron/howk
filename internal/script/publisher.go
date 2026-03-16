@@ -25,7 +25,7 @@ func NewPublisher(brk broker.Broker, topic string) *Publisher {
 
 // PublishScript publishes a script configuration to Kafka
 // The script will be published with config_id as the key for compaction
-func (p *Publisher) PublishScript(ctx context.Context, script *ScriptConfig) error {
+func (p *Publisher) PublishScript(ctx context.Context, script *Config) error {
 	// Marshal script to JSON
 	data, err := json.Marshal(script)
 	if err != nil {

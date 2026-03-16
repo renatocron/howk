@@ -9,8 +9,8 @@ import (
 	"github.com/howk/howk/internal/domain"
 )
 
-// ScriptConfig represents a Lua script configuration for a config_id
-type ScriptConfig struct {
+// Config represents a Lua script configuration for a config_id
+type Config struct {
 	ConfigID  domain.ConfigID `json:"config_id"`
 	LuaCode   string          `json:"lua_code"`
 	Hash      string          `json:"hash"`     // SHA256 of lua_code

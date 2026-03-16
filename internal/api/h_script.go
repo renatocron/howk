@@ -69,7 +69,7 @@ func (s *Server) handleUploadScript(c *gin.Context) {
 
 	// Create script config
 	now := time.Now()
-	scriptConfig := &script.ScriptConfig{
+	scriptConfig := &script.Config{
 		ConfigID:  configID,
 		LuaCode:   req.LuaCode,
 		Hash:      scriptHash,
@@ -125,7 +125,7 @@ func (s *Server) handleGetScript(c *gin.Context) {
 	}
 
 	// Unmarshal script config
-	var scriptConfig script.ScriptConfig
+	var scriptConfig script.Config
 	if err := json.Unmarshal([]byte(scriptJSON), &scriptConfig); err != nil {
 		s.logger.Error().Err(err).Msg("Failed to unmarshal cached script")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve script"})
@@ -200,7 +200,7 @@ func (s *Server) handleTestScript(c *gin.Context) {
 
 	// Load script into temporary loader for testing
 	tempLoader := script.NewLoader()
-	tempLoader.SetScript(&script.ScriptConfig{
+	tempLoader.SetScript(&script.Config{
 		ConfigID: testWebhook.ConfigID,
 		LuaCode:  req.LuaCode,
 		Hash:     "test",

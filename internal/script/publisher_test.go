@@ -37,7 +37,7 @@ func TestPublisher_PublishScript(t *testing.T) {
 	mock := &mockBroker{}
 	publisher := NewPublisher(mock, "howk.scripts")
 
-	script := &ScriptConfig{
+	script := &Config{
 		ConfigID:  "test_config_123",
 		LuaCode:   `headers["X-Custom"] = "value"`,
 		Hash:      "abc123def456",
@@ -63,8 +63,8 @@ func TestPublisher_PublishScript(t *testing.T) {
 		t.Errorf("Expected key %s, got %s", script.ConfigID, string(msg.Key))
 	}
 
-	// Verify value is marshaled ScriptConfig
-	var decoded ScriptConfig
+	// Verify value is marshaled Config
+	var decoded Config
 	if err := json.Unmarshal(msg.Value, &decoded); err != nil {
 		t.Fatalf("Failed to unmarshal published message: %v", err)
 	}
