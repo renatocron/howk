@@ -86,6 +86,11 @@ type RedisConfig struct {
 	DialTimeout  time.Duration `mapstructure:"dial_timeout"`
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
+
+	// Sentinel configuration (optional). When SentinelAddrs is non-empty,
+	// a FailoverClient is created instead of a regular Client.
+	SentinelAddrs      []string `mapstructure:"sentinel_addrs"`
+	SentinelMasterName string   `mapstructure:"sentinel_master_name"`
 }
 
 type DeliveryConfig struct {
@@ -365,6 +370,8 @@ func bindEnvVariables(v *viper.Viper) error {
 		"redis.dial_timeout",
 		"redis.read_timeout",
 		"redis.write_timeout",
+		"redis.sentinel_addrs",
+		"redis.sentinel_master_name",
 		// Delivery
 		"delivery.timeout",
 		"delivery.max_idle_conns",

@@ -37,6 +37,13 @@ data:
       addr: {{ .Values.externalServices.redis.addr | quote }}
       password: {{ .Values.externalServices.redis.password | quote }}
       db: 0
+{{- if .Values.externalServices.redis.sentinelAddrs }}
+      sentinel_addrs:
+{{- range .Values.externalServices.redis.sentinelAddrs }}
+        - {{ . | quote }}
+{{- end }}
+      sentinel_master_name: {{ .Values.externalServices.redis.sentinelMasterName | quote }}
+{{- end }}
       pool_size: {{ .Values.config.redis.poolSize }}
       min_idle_conns: {{ .Values.config.redis.minIdleConns }}
       dial_timeout: {{ .Values.config.redis.dialTimeout | quote }}

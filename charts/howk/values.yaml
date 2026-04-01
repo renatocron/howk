@@ -14,9 +14,13 @@
 #
 externalServices:
   redis:
-    addr: "redis-master:6379"   # Redis host:port
+    addr: "redis-master:6379"   # Redis host:port (used when sentinel is not configured)
     password: ""                 # Redis password (if auth enabled)
     db: 0
+    # Sentinel configuration (optional). When sentinelAddrs is non-empty,
+    # a FailoverClient is used instead of connecting to addr directly.
+    sentinelAddrs: []            # e.g. ["rfs-redis.redis.svc:26379"]
+    sentinelMasterName: ""       # e.g. "mymaster"
   
   kafka:
     brokers:

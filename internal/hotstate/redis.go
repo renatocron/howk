@@ -59,18 +59,35 @@ type RedisHotState struct {
 	ttlConfig     config.TTLConfig
 }
 
-// NewRedisHotState creates a new Redis-backed hot state
+// NewRedisHotState creates a new Redis-backed hot state.
+// When SentinelAddrs is configured, a FailoverClient is used for automatic
+// master discovery and failover. Otherwise, a regular Client connects to Addr.
 func NewRedisHotState(cfg config.RedisConfig, cbConfig config.CircuitBreakerConfig, ttlConfig config.TTLConfig) (*RedisHotState, error) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         cfg.Addr,
-		Password:     cfg.Password,
-		DB:           cfg.DB,
-		PoolSize:     cfg.PoolSize,
-		MinIdleConns: cfg.MinIdleConns,
-		DialTimeout:  cfg.DialTimeout,
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
-	})
+	var rdb *redis.Client
+	if len(cfg.SentinelAddrs) > 0 {
+		rdb = redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:    cfg.SentinelMasterName,
+			SentinelAddrs: cfg.SentinelAddrs,
+			Password:      cfg.Password,
+			DB:            cfg.DB,
+			PoolSize:      cfg.PoolSize,
+			MinIdleConns:  cfg.MinIdleConns,
+			DialTimeout:   cfg.DialTimeout,
+			ReadTimeout:   cfg.ReadTimeout,
+			WriteTimeout:  cfg.WriteTimeout,
+		})
+	} else {
+		rdb = redis.NewClient(&redis.Options{
+			Addr:         cfg.Addr,
+			Password:     cfg.Password,
+			DB:           cfg.DB,
+			PoolSize:     cfg.PoolSize,
+			MinIdleConns: cfg.MinIdleConns,
+			DialTimeout:  cfg.DialTimeout,
+			ReadTimeout:  cfg.ReadTimeout,
+			WriteTimeout: cfg.WriteTimeout,
+		})
+	}
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
