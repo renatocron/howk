@@ -69,6 +69,109 @@ externalServices:
       - "kafka:9092"             # Your Kafka brokers
 ```
 
+### Redis Sentinel (High Availability)
+
+When using Redis with Sentinel for automatic failover, configure `sentinelAddrs`
+instead of `addr`:
+
+```yaml
+externalServices:
+  redis:
+    addr: ""                              # ignored when sentinel is configured
+    password: ""
+    sentinelAddrs:
+      - "rfs-redis.redis.svc:26379"       # Sentinel endpoints
+    sentinelMasterName: "mymaster"         # Sentinel master name
+```
+
+This uses go-redis `FailoverClient` for automatic master discovery and failover.
+
+### ArgoCD Deployment
+
+When deploying via ArgoCD with a single source and inline Helm values:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: howk
+  namespace: argocd
+spec:
+  source:
+    repoURL: https://github.com/renatocron/howk.git
+    targetRevision: v0.2.0
+    path: charts/howk
+    helm:
+      values: |
+        images:
+          api:
+            tag: v0.2.0
+          worker:
+            tag: v0.2.0
+          scheduler:
+            tag: v0.2.0
+          reconciler:
+            tag: v0.2.0
+        externalServices:
+          kafka:
+            brokers:
+              - "my-kafka-0.my-kafka-brokers.kafka.svc:9092"
+          redis:
+            sentinelAddrs:
+              - "rfs-redis.redis.svc:26379"
+            sentinelMasterName: "mymaster"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: howk
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+```
+
+### Kafka Topics
+
+HOWK requires 6 Kafka topics. Create them before deploying. You can customize
+topic names via `config.kafka.topics` in values:
+
+```yaml
+config:
+  kafka:
+    topics:
+      pending: my-howk-pending
+      results: my-howk-results
+      deadletter: my-howk-deadletter
+      scripts: my-howk-scripts
+      slow: my-howk-slow
+      state: my-howk-state
+```
+
+Example topic creation for a 3-broker cluster:
+
+```bash
+BROKER=localhost:9092
+
+# Standard topics
+for topic in my-howk-pending my-howk-results my-howk-slow; do
+  kafka-topics.sh --bootstrap-server $BROKER \
+    --create --topic $topic --partitions 6 --replication-factor 3 --if-not-exists
+done
+
+kafka-topics.sh --bootstrap-server $BROKER \
+  --create --topic my-howk-deadletter --partitions 1 --replication-factor 3 --if-not-exists
+
+# Compacted topics
+kafka-topics.sh --bootstrap-server $BROKER \
+  --create --topic my-howk-scripts --partitions 1 --replication-factor 3 --if-not-exists \
+  --config cleanup.policy=compact --config compression.type=snappy
+
+kafka-topics.sh --bootstrap-server $BROKER \
+  --create --topic my-howk-state --partitions 1 --replication-factor 3 --if-not-exists \
+  --config cleanup.policy=compact --config segment.bytes=104857600 --config min.cleanable.dirty.ratio=0.01
+```
+
 ### Scaling
 
 ```yaml
