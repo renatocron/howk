@@ -4,12 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	lua "github.com/yuin/gopher-lua"
 
 	"github.com/howk/howk/internal/domain"
 )
+
+// extractLoaderNamespace returns the part before the first ":" in a config_id.
+func extractLoaderNamespace(configID string) string {
+	if idx := strings.Index(configID, ":"); idx > 0 {
+		return configID[:idx]
+	}
+	return ""
+}
 
 // CompiledScript represents a pre-compiled Lua script
 type CompiledScript struct {
@@ -30,17 +39,27 @@ func NewLoader() *Loader {
 	}
 }
 
-// GetScript retrieves a script by config ID
+// GetScript retrieves a script by config ID.
+// If no exact match is found, falls back to namespace-level script
+// (e.g., "wh:42" falls back to "wh"). This allows a single script
+// to handle all config_ids within a namespace.
 func (l *Loader) GetScript(configID domain.ConfigID) (*Config, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	script, ok := l.scripts[configID]
-	if !ok {
-		return nil, fmt.Errorf("script not found for config_id: %s", configID)
+	// Exact match first
+	if script, ok := l.scripts[configID]; ok {
+		return script, nil
 	}
 
-	return script, nil
+	// Namespace fallback: "wh:42" → try "wh"
+	if ns := extractLoaderNamespace(string(configID)); ns != "" && ns != string(configID) {
+		if script, ok := l.scripts[domain.ConfigID(ns)]; ok {
+			return script, nil
+		}
+	}
+
+	return nil, fmt.Errorf("script not found for config_id: %s", configID)
 }
 
 // GetScriptHash retrieves just the hash for a config ID

@@ -247,6 +247,51 @@ func TestLoader_SetScript_Update(t *testing.T) {
 	assert.Equal(t, "print('v2')", script.LuaCode)
 }
 
+// TestLoader_GetScript_NamespaceFallback tests that GetScript falls back to namespace-level script
+func TestLoader_GetScript_NamespaceFallback(t *testing.T) {
+	loader := NewLoader()
+
+	// Register a namespace-level script for "wh"
+	loader.SetScript(&Config{
+		ConfigID: "wh",
+		Hash:     "ns_hash",
+		LuaCode:  "-- namespace script",
+	})
+
+	// Exact match: "wh" should return the script
+	script, err := loader.GetScript("wh")
+	require.NoError(t, err)
+	assert.Equal(t, "ns_hash", script.Hash)
+
+	// Namespace fallback: "wh:42" should fall back to "wh"
+	script, err = loader.GetScript("wh:42")
+	require.NoError(t, err)
+	assert.Equal(t, "ns_hash", script.Hash)
+
+	// Exact match takes priority over namespace
+	loader.SetScript(&Config{
+		ConfigID: "wh:42",
+		Hash:     "exact_hash",
+		LuaCode:  "-- exact script",
+	})
+	script, err = loader.GetScript("wh:42")
+	require.NoError(t, err)
+	assert.Equal(t, "exact_hash", script.Hash)
+
+	// Other config_ids in same namespace still fall back
+	script, err = loader.GetScript("wh:99")
+	require.NoError(t, err)
+	assert.Equal(t, "ns_hash", script.Hash)
+
+	// No fallback for config_ids without namespace match
+	_, err = loader.GetScript("other:1")
+	assert.Error(t, err)
+
+	// No fallback for bare config_ids without ":"
+	_, err = loader.GetScript("unknown")
+	assert.Error(t, err)
+}
+
 // TestLoader_RaceDetector is specifically designed to trigger the race detector
 func TestLoader_RaceDetector(t *testing.T) {
 	loader := NewLoader()
