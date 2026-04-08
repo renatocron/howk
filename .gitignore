@@ -1,9 +1,11 @@
 # Binaries
 bin/
+dist/
 /api
 /worker
 /scheduler
 /reconciler
+/dev
 *.exe
 *.exe~
 *.dll
@@ -43,3 +45,9 @@ config.yaml
 
 # Desloppify local state
 .desloppify/
+
+# users-specific scripts (belong in deploy repo, not public)
+scripts/gl-*
+
+# For now
+clickhouse/

@@ -18,6 +18,16 @@ run-worker:
 run-scheduler:
 	go run ./cmd/scheduler
 
+# Run dev mode (single process, no Kafka/Redis needed)
+run-dev:
+	go run ./cmd/dev
+
+run-dev-dry:
+	go run ./cmd/dev --dry
+
+run-dev-scripts:
+	go run ./cmd/dev --scripts-dir=./scripts
+
 # Run all components together (for development)
 run-all:
 	@echo "Starting all components..."

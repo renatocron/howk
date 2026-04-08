@@ -583,6 +583,7 @@ Circuit HALF_OPEN: immediate (it's a probe)
 | `howk-worker` | Consumes pending, delivers, produces results. Includes both fast lane and slow lane workers |
 | `howk-scheduler` | Pops due retries from Redis, re-enqueues to Kafka |
 | `howk-reconciler` | Rebuilds Redis state from Kafka replay |
+| `howk-dev` | Single-process dev mode — no Kafka/Redis needed (see [Dev Mode](#dev-mode)) |
 
 ## Quick Start
 
@@ -604,6 +605,26 @@ curl -X POST http://localhost:8080/webhooks/tenant123/enqueue \
     "idempotency_key": "user-created-123"
   }'
 ```
+
+### Quick Start (Dev Mode — No Docker)
+
+```bash
+# Single binary, zero infrastructure
+go run ./cmd/dev
+
+# Or with dry-run (simulates delivery, no HTTP calls)
+go run ./cmd/dev --dry
+
+# With Lua scripts loaded from disk
+go run ./cmd/dev --scripts-dir=./scripts
+
+# Test it
+curl -X POST http://localhost:8080/webhooks/tenant123/enqueue \
+  -H "Content-Type: application/json" \
+  -d '{"endpoint": "https://httpbin.org/post", "payload": {"event": "test"}}'
+```
+
+See [Dev Mode](#dev-mode) for full documentation.
 
 ## Configuration
 
@@ -816,6 +837,120 @@ Response: `200 OK`
 - Hot-reload via SIGHUP
 - KV store access for deduplication/state
 - HTTP client for external API calls
+
+## Dev Mode
+
+HOWK includes a single-process dev mode that runs the full webhook lifecycle (API + worker + scheduler) with no external dependencies. Kafka is replaced by an in-memory channel-based broker, and Redis is replaced by [miniredis](https://github.com/alicebob/miniredis) (a full Redis implementation in Go).
+
+### Why
+
+Running Kafka + Redis locally requires Docker and adds friction for developers who just need to test webhook delivery flows. Dev mode eliminates that:
+
+```bash
+go run ./cmd/dev        # That's it. No Docker, no infra.
+```
+
+### What Works
+
+| Feature | Dev Mode | Production |
+|---------|----------|------------|
+| Webhook enqueue + delivery | In-memory broker | Kafka |
+| Status tracking | miniredis | Redis |
+| Circuit breaker | miniredis (full state machine) | Redis |
+| Retry scheduling | miniredis | Redis |
+| Lua scripts (`kv.get`/`kv.set`) | miniredis | Redis |
+| HTTP delivery | Real HTTP (or `--dry`) | Real HTTP |
+| Slow lane / penalty box | In-memory broker | Kafka |
+| Transformer scripts | Supported | Supported |
+
+### Flags
+
+```
+--config        Config file path (optional, uses defaults)
+--scripts-dir   Directory with .lua/.json script files
+--port          API port (default: 8080, overrides config)
+--dry           Dry-run mode: log deliveries, return 200 without HTTP calls
+```
+
+### Loading Scripts
+
+Scripts can be loaded from disk at startup. Two formats are supported:
+
+**`.lua` files** — raw Lua code, filename becomes `config_id`:
+
+```bash
+# scripts/wh.lua → config_id "wh"
+# scripts/caesb.lua → config_id "caesb"
+go run ./cmd/dev --scripts-dir=./scripts
+```
+
+**`.json` files** — full script config:
+
+```json
+{
+  "config_id": "wh",
+  "lua_code": "request.headers['X-Custom'] = 'value'",
+  "hash": "abc123",
+  "version": "1.0"
+}
+```
+
+Scripts can also be uploaded at runtime via the API (`PUT /config/:id/script`) — they flow through the in-memory broker just like production.
+
+### Dry-Run Mode
+
+With `--dry`, deliveries are logged but no HTTP requests are made. The worker assumes a 200 OK response for every webhook:
+
+```bash
+go run ./cmd/dev --dry --scripts-dir=./scripts
+```
+
+```
+INF DRY: would deliver webhook_id=wh_01KNN... endpoint=https://example.com/hook payload_bytes=42
+INF Delivery succeeded status_code=200 duration=1ms
+```
+
+This is useful for testing Lua script transformations, payload routing, and retry logic without needing a live endpoint.
+
+### Makefile Targets
+
+```bash
+make run-dev           # Live delivery, no scripts
+make run-dev-dry       # Dry-run mode
+make run-dev-scripts   # With scripts from ./scripts/
+```
+
+### Limitations
+
+- **No persistence** — all state is lost on restart (miniredis + in-memory broker)
+- **No reconciler** — not needed without real Kafka to replay from
+- **Single-process** — no partition parallelism or consumer groups
+- **No Kafka compaction** — script topic is simple pub/sub
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────┐
+│                  cmd/dev/main.go                    │
+│                                                    │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────┐    │
+│  │   API    │  │  Worker  │  │   Scheduler   │    │
+│  │  Server  │  │  + Slow  │  │               │    │
+│  └────┬─────┘  └────┬─────┘  └───────┬───────┘    │
+│       │              │                │            │
+│       ▼              ▼                ▼            │
+│  ┌─────────────────────────────────────────────┐   │
+│  │          MemBroker (channels)               │   │
+│  │  howk.pending → howk.results → howk.dl      │   │
+│  └─────────────────────────────────────────────┘   │
+│       │              │                │            │
+│       ▼              ▼                ▼            │
+│  ┌─────────────────────────────────────────────┐   │
+│  │       miniredis (in-process Redis)          │   │
+│  │  circuit breaker, retries, status, KV, ...  │   │
+│  └─────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────┘
+```
 
 ## Recovery
 

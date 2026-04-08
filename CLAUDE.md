@@ -34,6 +34,7 @@ cmd/                          # Entry points for each binary
   worker/main.go              # Webhook delivery worker
   scheduler/main.go           # Retry scheduler
   reconciler/main.go          # State rebuilder from Kafka
+  dev/main.go                 # Dev mode: single-process, no Kafka/Redis
 
 internal/                     # Internal packages
   domain/                     # Core domain types
@@ -75,6 +76,10 @@ internal/                     # Internal packages
       log.go                  # Structured logging
   reconciler/                 # State recovery
     reconciler.go             # Kafka replay to rebuild Redis
+  devmode/                    # Dev mode implementations
+    broker.go                 # In-memory broker (replaces Kafka)
+    dry.go                    # Dry-run deliverer (simulates 200 OK)
+    scripts.go                # Load scripts from disk (.lua/.json)
   testutil/                   # Test utilities
     testutil.go               # Test helpers
     fixtures.go               # Test data
@@ -106,7 +111,15 @@ go build -o bin/howk-reconciler ./cmd/reconciler
 ## Development Commands
 
 ```bash
-# Start infrastructure (Kafka, Redis, echo server)
+# Dev mode: single-process, no Docker/Kafka/Redis needed
+make run-dev             # Live HTTP delivery
+make run-dev-dry         # Dry-run (log deliveries, assume 200)
+make run-dev-scripts     # With Lua scripts from ./scripts/
+
+# Or directly with flags:
+go run ./cmd/dev --port 9090 --dry --scripts-dir=./scripts
+
+# Start infrastructure (Kafka, Redis, echo server) — for production-like dev
 make infra
 
 # Stop infrastructure
@@ -115,12 +128,12 @@ make infra-down
 # Clean infrastructure (removes volumes)
 make infra-clean
 
-# Run components individually (for development)
+# Run components individually (requires infra)
 make run-api        # API server on :8080
 make run-worker     # Worker
 make run-scheduler  # Scheduler
 
-# Run all components together
+# Run all components together (requires infra)
 make run-all
 ```
 
@@ -565,6 +578,23 @@ make test-stats
 | Add HTTP handler | `internal/api/h_*.go` |
 | Add integration test | `internal/{pkg}/*_integration_test.go` |
 | Add unit test | `internal/{pkg}/*_test.go` (with `//go:build !integration`) |
+| Modify dev mode broker | `internal/devmode/broker.go` |
+| Modify dev mode wiring | `cmd/dev/main.go` |
+| Add dev mode script format | `internal/devmode/scripts.go` |
+
+## Dev Mode Architecture
+
+Dev mode (`cmd/dev/main.go`) runs API + worker + scheduler in a single process with no external dependencies:
+
+- **Kafka** → `internal/devmode/broker.go` (`MemBroker`): channel-based pub/sub, fan-out to all subscribers
+- **Redis** → `miniredis` (already a project dependency): full Redis in-process, used by `RedisHotState` unchanged
+- **Delivery** → real `delivery.Client` or `devmode.DryDeliverer` (`--dry` flag)
+- **Scripts** → loaded from disk via `devmode.LoadScriptsFromDir`, supports `.lua` and `.json` files
+- **KV module** → works via miniredis `*redis.Client` passed to `script.Engine`
+
+The key design choice is using miniredis instead of a custom in-memory hotstate. This gives exact production parity for circuit breakers, retries, stats, and KV — all backed by the same `RedisHotState` code that runs in production.
+
+No production code was modified. The `MemBroker` implements `broker.Broker` and `MemWebhookPublisher` implements `broker.WebhookPublisher`. The `DryDeliverer` implements `delivery.Deliverer`.
 
 ## Common Gotchas
 
