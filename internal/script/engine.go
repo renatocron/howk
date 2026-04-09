@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -225,7 +226,7 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, scriptCfg *Co
 	for k, v := range scriptCfg.ScriptConfig {
 		switch val := v.(type) {
 		case string:
-			configTable.RawSetString(k, lua.LString(val))
+			configTable.RawSetString(k, lua.LString(os.Expand(val, os.Getenv)))
 		case float64:
 			configTable.RawSetString(k, lua.LNumber(val))
 		case bool:
