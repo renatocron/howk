@@ -260,6 +260,13 @@ global:
 serviceAccount:
   create: true
 
+# Extra environment variable sources (secrets, configmaps) for all pods
+# Example: mount a Kubernetes secret as env vars
+#   extraEnvFrom:
+#     - secretRef:
+#         name: howk-crypto-key
+extraEnvFrom: []
+
 # Node placement
 nodeSelector: {}
 tolerations: []
