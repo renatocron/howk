@@ -5,6 +5,16 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-09
+
+### Fixed
+- **Namespace fallback in Redis hotstate**: `GetScript("wh:1:1")` now falls back to `wh` in Redis (not just the in-memory Loader), fixing script execution for namespaced config IDs in production.
+- **Dev mode companion JSON loading**: `.json` files without `lua_code` are now treated as companion config (accessible as `config.*` in Lua) rather than full script configs. Backward-compatible with existing full-config `.json` files.
+
+### Added
+- **ScriptConfig field**: `script.Config` now carries `script_config` (arbitrary key-value map) populated from companion JSON or API upload, accessible as `config.*` globals in Lua scripts.
+- **Upload script_config via API**: `PUT /config/:config_id/script` accepts optional `script_config` field.
+
 ## [0.3.0] - 2026-04-08
 
 ### Added
@@ -47,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Test infrastructure**: Integration tests with isolated Kafka topics + Redis key prefixes (`testutil.NewIsolatedEnv`), unit tests with miniredis.
 - **CI/CD**: GitHub Actions with Redis + Redpanda services, race detector, Codecov integration.
 
+[0.4.0]: https://github.com/renatocron/howk/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/renatocron/howk/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/renatocron/howk/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/renatocron/howk/releases/tag/v0.1.0
