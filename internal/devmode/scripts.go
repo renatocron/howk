@@ -17,9 +17,14 @@ import (
 // Supported formats:
 //   - .json files: full script.Config JSON (config_id, lua_code, hash, version)
 //   - .lua files: raw Lua code; filename (minus extension) becomes config_id,
-//     hash is computed from content
+//     hash is computed from content. If a companion .json with the same base name
+//     exists (and was NOT already loaded as a full Config), it is parsed as
+//     key-value config and stored in ScriptConfig (accessible as config.* in Lua).
 func LoadScriptsFromDir(dir string, loader *script.Loader) (int, error) {
 	count := 0
+
+	// Track which .json files were consumed as full configs
+	consumedJSON := make(map[string]bool)
 
 	// Load .json script configs
 	jsonFiles, _ := filepath.Glob(filepath.Join(dir, "*.json"))
@@ -34,7 +39,13 @@ func LoadScriptsFromDir(dir string, loader *script.Loader) (int, error) {
 			return count, fmt.Errorf("parse %s: %w", path, err)
 		}
 
+		// Only treat as full config if it has lua_code (the required field)
+		if cfg.LuaCode == "" {
+			continue
+		}
+
 		loader.SetScript(&cfg)
+		consumedJSON[filepath.Base(path)] = true
 		count++
 	}
 
@@ -50,12 +61,27 @@ func LoadScriptsFromDir(dir string, loader *script.Loader) (int, error) {
 		code := string(data)
 		hash := fmt.Sprintf("%x", sha256.Sum256(data))[:12]
 
-		loader.SetScript(&script.Config{
+		cfg := &script.Config{
 			ConfigID: domain.ConfigID(name),
 			LuaCode:  code,
 			Hash:     hash,
 			Version:  "dev",
-		})
+		}
+
+		// Load companion .json as ScriptConfig if it exists and wasn't a full config
+		jsonFile := name + ".json"
+		if !consumedJSON[jsonFile] {
+			jsonPath := filepath.Join(dir, jsonFile)
+			if jsonData, err := os.ReadFile(jsonPath); err == nil {
+				var sc map[string]interface{}
+				if err := json.Unmarshal(jsonData, &sc); err != nil {
+					return count, fmt.Errorf("parse %s: %w", jsonPath, err)
+				}
+				cfg.ScriptConfig = sc
+			}
+		}
+
+		loader.SetScript(cfg)
 		count++
 	}
 

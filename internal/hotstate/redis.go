@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -666,6 +667,14 @@ func (r *RedisHotState) GetScript(ctx context.Context, configID domain.ConfigID)
 	key := scriptPrefix + string(configID)
 	data, err := r.rdb.Get(ctx, key).Result()
 	if err == redis.Nil {
+		// Namespace fallback: "wh:42:6" → try "wh"
+		if idx := strings.Index(string(configID), ":"); idx > 0 {
+			ns := string(configID)[:idx]
+			data, err = r.rdb.Get(ctx, scriptPrefix+ns).Result()
+			if err == nil {
+				return data, nil
+			}
+		}
 		return "", fmt.Errorf("%w: %s", ErrScriptNotFound, configID)
 	}
 	if err != nil {

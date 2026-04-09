@@ -168,7 +168,7 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 		e.loadLogModule(L, string(webhook.ID))
 
 		// Pass the timeout context to the script executor
-		result, err := e.executeScript(timeoutCtx, L, scriptConfig.LuaCode, webhook)
+		result, err := e.executeScript(timeoutCtx, L, scriptConfig, webhook)
 		if err != nil {
 			errCh <- err
 		} else {
@@ -203,7 +203,8 @@ func (e *Engine) Execute(ctx context.Context, webhook *domain.Webhook) (*domain.
 }
 
 // executeScript runs the Lua code and extracts the transformation
-func (e *Engine) executeScript(ctx context.Context, L *lua.LState, luaCode string, webhook *domain.Webhook) (*TransformResult, error) {
+func (e *Engine) executeScript(ctx context.Context, L *lua.LState, scriptCfg *Config, webhook *domain.Webhook) (*TransformResult, error) {
+	luaCode := scriptCfg.LuaCode
 	// Set context for cancellation
 	L.SetContext(ctx)
 
@@ -221,6 +222,18 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, luaCode strin
 	L.SetGlobal("request", requestTable)
 
 	configTable := L.NewTable()
+	for k, v := range scriptCfg.ScriptConfig {
+		switch val := v.(type) {
+		case string:
+			configTable.RawSetString(k, lua.LString(val))
+		case float64:
+			configTable.RawSetString(k, lua.LNumber(val))
+		case bool:
+			configTable.RawSetString(k, lua.LBool(val))
+		default:
+			configTable.RawSetString(k, lua.LString(fmt.Sprintf("%v", val)))
+		}
+	}
 	L.SetGlobal("config", configTable)
 
 	// Compile and execute script

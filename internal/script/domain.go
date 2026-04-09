@@ -11,12 +11,13 @@ import (
 
 // Config represents a Lua script configuration for a config_id
 type Config struct {
-	ConfigID  domain.ConfigID `json:"config_id"`
-	LuaCode   string          `json:"lua_code"`
-	Hash      string          `json:"hash"`     // SHA256 of lua_code
-	Version   string          `json:"version"`  // User-provided version identifier
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ConfigID     domain.ConfigID        `json:"config_id"`
+	LuaCode      string                 `json:"lua_code"`
+	Hash         string                 `json:"hash"`                    // SHA256 of lua_code
+	Version      string                 `json:"version"`                 // User-provided version identifier
+	ScriptConfig map[string]interface{} `json:"script_config,omitempty"` // Config values accessible as config.* in Lua
+	CreatedAt    time.Time              `json:"created_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
 }
 
 // ScriptHash computes the SHA256 hash of Lua code

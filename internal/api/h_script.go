@@ -18,8 +18,9 @@ import (
 // Script request/response types
 
 type UploadScriptRequest struct {
-	LuaCode string `json:"lua_code" binding:"required"`
-	Version string `json:"version"`
+	LuaCode      string                 `json:"lua_code" binding:"required"`
+	Version      string                 `json:"version"`
+	ScriptConfig map[string]interface{} `json:"script_config,omitempty"`
 }
 
 type ScriptResponse struct {
@@ -70,12 +71,13 @@ func (s *Server) handleUploadScript(c *gin.Context) {
 	// Create script config
 	now := time.Now()
 	scriptConfig := &script.Config{
-		ConfigID:  configID,
-		LuaCode:   req.LuaCode,
-		Hash:      scriptHash,
-		Version:   req.Version,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ConfigID:     configID,
+		LuaCode:      req.LuaCode,
+		Hash:         scriptHash,
+		Version:      req.Version,
+		ScriptConfig: req.ScriptConfig,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	// Publish to Kafka
