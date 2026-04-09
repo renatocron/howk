@@ -340,12 +340,19 @@ func (e *Engine) extractTransformation(L *lua.LState) *TransformResult {
 		}
 	}
 
-	// Extract modified headers from global headers table
+	// Extract modified headers from global headers table.
+	// Headers set to "" are treated as removals.
 	headersTable := L.GetGlobal("headers")
 	if headersTable != lua.LNil {
 		if tbl, ok := headersTable.(*lua.LTable); ok {
 			tbl.ForEach(func(k, v lua.LValue) {
-				result.Headers[k.String()] = v.String()
+				key := k.String()
+				val := v.String()
+				if val == "" {
+					result.RemovedHeaders = append(result.RemovedHeaders, key)
+				} else {
+					result.Headers[key] = val
+				}
 			})
 		}
 	}
@@ -374,6 +381,11 @@ func (e *Engine) applyTransformation(webhook *domain.Webhook, result *TransformR
 		for k, v := range result.Headers {
 			transformed.Headers[k] = v
 		}
+	}
+
+	// Remove headers marked for deletion (set to "" in Lua)
+	for _, k := range result.RemovedHeaders {
+		delete(transformed.Headers, k)
 	}
 
 	// Note: OptOutDefaultHeaders will be handled by the delivery client

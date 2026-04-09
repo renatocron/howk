@@ -76,5 +76,6 @@ func (t ScriptErrorType) IsRetryable() bool {
 type TransformResult struct {
 	Body                   string            // Transformed payload (can be binary)
 	Headers                map[string]string // Additional/override headers
+	RemovedHeaders         []string          // Headers to remove (set to "" in Lua)
 	OptOutDefaultHeaders   bool              // Skip X-Webhook-* headers
 }
