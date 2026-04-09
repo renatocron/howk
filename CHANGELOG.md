@@ -5,6 +5,11 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-04-09
+
+### Added
+- **Header removal in Lua scripts**: Setting `headers["key"] = ""` now removes the header from the outgoing request instead of passing an empty value.
+
 ## [0.4.0] - 2026-04-09
 
 ### Fixed
@@ -57,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Test infrastructure**: Integration tests with isolated Kafka topics + Redis key prefixes (`testutil.NewIsolatedEnv`), unit tests with miniredis.
 - **CI/CD**: GitHub Actions with Redis + Redpanda services, race detector, Codecov integration.
 
+[0.4.1]: https://github.com/renatocron/howk/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/renatocron/howk/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/renatocron/howk/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/renatocron/howk/compare/v0.1.0...v0.2.0
