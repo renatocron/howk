@@ -5,6 +5,14 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-04-17
+
+### Added
+- **Env var substitution in transformer engine**: `${VAR_NAME}` syntax in `script_config` values is now resolved from the process environment by the transformer engine (`internal/transformer/engine.go`), matching the behavior of the Lua script engine (v0.4.3).
+
+### Security
+- Documented trust boundary around `script_config`: anyone with write access to a config can reference arbitrary process env vars via `${VAR_NAME}` and exfiltrate secrets. Until a per-namespace env var allowlist lands, restrict `PUT /config/:config_id/script` to trusted deployers (see TODOs in `internal/api/h_script.go` and `internal/script/engine.go`).
+
 ## [0.4.3] - 2026-04-09
 
 ### Added
