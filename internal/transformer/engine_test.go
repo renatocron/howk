@@ -4,10 +4,12 @@ package transformer
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/howk/howk/internal/config"
+	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/mocks"
 	lua "github.com/yuin/gopher-lua"
 
@@ -200,6 +202,54 @@ func TestEngine_Execute_ConfigTablePopulated(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Webhooks, 1)
 	assert.Equal(t, "https://target.example.com/hook", result.Webhooks[0].Endpoint)
+
+	pub.AssertExpectations(t)
+}
+
+func TestEngine_Execute_ConfigEnvExpansion(t *testing.T) {
+	t.Setenv("HOWK_TEST_TARGET_URL", "https://env-target.example.com/hook")
+	t.Setenv("HOWK_TEST_SECRET", "s3cret-abc")
+
+	e, pub, hs := newEngineWithMocks(t, 2*time.Second)
+
+	var captured *domain.Webhook
+	pub.On("PublishWebhook", mock.Anything, mock.AnythingOfType("*domain.Webhook")).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*domain.Webhook)
+		}).Return(nil)
+	hs.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
+
+	script := &TransformerScript{
+		Name: "envcfg",
+		LuaCode: `
+			howk.post(config.target_url, {
+				token = config.nested.secret,
+				missing = config.nested.missing,
+			})
+		`,
+		Config: map[string]any{
+			"target_url":      "${HOWK_TEST_TARGET_URL}",
+			"allowed_domains": []any{"env-target.example.com"},
+			"nested": map[string]any{
+				"secret":  "${HOWK_TEST_SECRET}",
+				"missing": "${HOWK_TEST_UNSET_VAR}", // unset env → empty string
+			},
+		},
+	}
+
+	result, err := e.Execute(context.Background(), script, []byte(`{}`), nil)
+	require.NoError(t, err)
+	require.Len(t, result.Webhooks, 1)
+	assert.Equal(t, "https://env-target.example.com/hook", result.Webhooks[0].Endpoint,
+		"string config values should expand ${VAR} from process env")
+
+	require.NotNil(t, captured, "publisher should have received the webhook")
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(captured.Payload, &body))
+	assert.Equal(t, "s3cret-abc", body["token"],
+		"nested string config values should also expand ${VAR}")
+	assert.Equal(t, "", body["missing"],
+		"unset env vars should expand to empty string (os.Expand default)")
 
 	pub.AssertExpectations(t)
 }

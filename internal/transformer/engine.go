@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -381,11 +382,20 @@ func (e *Engine) parsePostOptions(tbl *lua.LTable, opts *postOptions) {
 	})
 }
 
-// setLuaValue sets a Go value in a Lua table
+// setLuaValue sets a Go value in a Lua table.
+//
+// String values are expanded via os.Expand so ${VAR_NAME} in script config
+// resolves from the process environment at execution time. Keeps secrets
+// (webhook URLs, API keys) in env/K8s Secrets instead of in the config JSON
+// that ships via ConfigMap. Mirrors internal/script/engine.go.
+//
+// Caveat: any script author with write access to script_config can exfiltrate
+// arbitrary process env vars (e.g. "${HOWK_LUA_CRYPTO_GL}"). Treat config-file
+// authorship as a trust boundary.
 func (e *Engine) setLuaValue(L *lua.LState, tbl *lua.LTable, key string, value interface{}) {
 	switch v := value.(type) {
 	case string:
-		tbl.RawSetString(key, lua.LString(v))
+		tbl.RawSetString(key, lua.LString(os.Expand(v, os.Getenv)))
 	case float64:
 		tbl.RawSetString(key, lua.LNumber(v))
 	case bool:

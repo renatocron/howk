@@ -222,6 +222,12 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, scriptCfg *Co
 	requestTable := L.NewTable()
 	L.SetGlobal("request", requestTable)
 
+	// TODO(security): Add per-namespace env var allowlist for ${VAR_NAME} resolution.
+	// Currently os.Expand resolves ANY process env var, so a script author who can
+	// set script_config could exfiltrate secrets (e.g. "${HOWK_LUA_CRYPTO_GL}").
+	// Desired: each namespace (e.g. "wh", "caesb") declares which env vars are
+	// permitted; default is NONE (no env vars resolved). Store the allowlist in
+	// config.yaml or as a per-script field gated by admin-only API auth.
 	configTable := L.NewTable()
 	for k, v := range scriptCfg.ScriptConfig {
 		switch val := v.(type) {

@@ -47,6 +47,22 @@ type TestScriptResponse struct {
 }
 
 // handleUploadScript handles PUT /config/:config_id/script
+//
+// TODO(security): This endpoint is currently unauthenticated. Add API key or mTLS auth
+// to prevent unauthorized script/config uploads from within the cluster.
+//
+// TODO(security): script_config behavior on update:
+//   - Currently: every PUT replaces the full Config (including script_config).
+//     Deploying lua_code without script_config wipes existing config values.
+//   - Desired: make script_config optional — omitted field preserves existing,
+//     explicit JSON null clears it. This lets lua_code-only deploys leave config intact.
+//
+// WARNING: script_config values using ${VAR_NAME} templates are resolved from the
+// process environment at Lua execution time (v0.4.3+). Any user who can write
+// script_config can reference arbitrary env vars, potentially leaking secrets
+// (e.g. HOWK_LUA_CRYPTO_GL, Redis password) into Lua globals or HTTP requests.
+// Until an env var allowlist is implemented (see engine.go TODO), restrict API
+// access to trusted deployers only.
 func (s *Server) handleUploadScript(c *gin.Context) {
 	configID := domain.ConfigID(c.Param("config_id"))
 
