@@ -203,6 +203,8 @@ config:
 # Define your transformer scripts
 transformerScripts:
   stripe-router: |
+    local json = require("json")
+
     local ok, event = pcall(json.decode, incoming)
     if not ok then return end
     

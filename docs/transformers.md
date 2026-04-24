@@ -17,6 +17,8 @@ Create a Lua file in your configured script directory:
 -- /etc/howk/transformers/echo.lua
 -- Simple echo transformer: forwards incoming payload to a single endpoint
 
+local json = require("json")
+
 local data = json.decode(incoming)
 
 -- Create outgoing webhook
@@ -81,6 +83,8 @@ config:
 # Define transformer scripts inline
 transformerScripts:
   stripe-router: |
+    local json = require("json")
+
     local ok, event = pcall(json.decode, incoming)
     if not ok then return end
     
@@ -125,11 +129,15 @@ Script names must match the pattern: `^[a-z0-9][a-z0-9_-]*$`
 
 ### Globals (Read-Only)
 
+These are the only values injected as globals. Everything else (including `json`, `base64`, `kv`, `http`, `crypto`) must be loaded with `require(...)`.
+
 | Global | Type | Description |
 |--------|------|-------------|
 | `incoming` | string | Raw request body (bytes as string) |
 | `headers` | table | HTTP request headers |
 | `config` | table | Contents of `[script].json` (empty if no file) |
+| `howk` | table | Fan-out API — see below |
+| `log` | table | Structured logging — see Built-in Modules |
 
 ### howk Module
 
@@ -164,16 +172,28 @@ log.info("Created webhook: " .. id)
 
 ### Built-in Modules
 
-Same modules available as worker-side scripts:
+Same modules available as worker-side scripts.
 
-| Module | Functions |
-|--------|-----------|
-| `json` | `json.encode(table)`, `json.decode(string)` |
-| `base64` | `base64.encode(str)`, `base64.decode(str)` |
-| `kv` | `kv.get(key)`, `kv.set(key, value [, ttl])`, `kv.del(key)` |
-| `http` | `http.get(url [, headers [, options]])` |
-| `log` | `log.info(msg [, fields])`, `log.warn()`, `log.error()`, `log.debug()` |
-| `crypto` | `crypto.decrypt_credential(key_suffix, sym_key, data)` |
+> **Important:** `json`, `base64`, `kv`, `http`, and `crypto` are **preload modules** — you **must** call `require("...")` before using them. Only `log` is available as a global (no `require` needed).
+>
+> ```lua
+> local json   = require("json")
+> local base64 = require("base64")
+> local kv     = require("kv")
+> local http   = require("http")
+> local crypto = require("crypto")
+> ```
+>
+> Forgetting the `require` results in errors like `attempt to index a non-table object(nil) with key 'decode'`.
+
+| Module | Kind | Functions |
+|--------|------|-----------|
+| `json` | preload (`require("json")`) | `json.encode(table)`, `json.decode(string)` |
+| `base64` | preload (`require("base64")`) | `base64.encode(str)`, `base64.decode(str)` |
+| `kv` | preload (`require("kv")`) | `kv.get(key)`, `kv.set(key, value [, ttl])`, `kv.del(key)` |
+| `http` | preload (`require("http")`) | `http.get(url [, headers [, options]])` |
+| `crypto` | preload (`require("crypto")`) | `crypto.decrypt_credential(key_suffix, sym_key, data)` |
+| `log` | global | `log.info(msg [, fields])`, `log.warn()`, `log.error()`, `log.debug()` |
 
 ## Handling Different Content Types
 
@@ -182,6 +202,8 @@ The `/incoming/:script_name` endpoint accepts **any** content type. The raw body
 ### JSON Payloads
 
 ```lua
+local json = require("json")
+
 -- Handle JSON with error checking
 local ok, data = pcall(json.decode, incoming)
 if not ok then
@@ -322,6 +344,9 @@ curl -X POST http://localhost:8080/incoming/stripe-ingest \
 Always use `pcall` for operations that might fail:
 
 ```lua
+local json = require("json")
+local http = require("http")
+
 -- Safe JSON parsing
 local ok, data = pcall(json.decode, incoming)
 if not ok then
@@ -355,6 +380,8 @@ A script may legitimately create 0 webhooks:
 
 ```lua
 -- Event filter transformer
+local json = require("json")
+
 local data = json.decode(incoming)
 
 if data.event_type ~= "critical_alert" then
@@ -390,6 +417,8 @@ Available examples:
 
 ```lua
 -- Simple event router
+local json = require("json")
+
 local ok, data = pcall(json.decode, incoming)
 if not ok then
     log.error("Invalid JSON")

@@ -118,6 +118,8 @@ local decoded = base64.decode(encoded_string)
 HTTP GET requests with allowlist.
 
 ```lua
+local http = require("http")
+
 -- Simple GET
 local response = http.get("https://api.example.com/token")
 
@@ -142,6 +144,8 @@ local response = http.get("https://api.example.com/data", {
 Redis-backed key-value storage.
 
 ```lua
+local kv = require("kv")
+
 -- Set value
 kv.set("token", "abc123", 3600)  -- key, value, ttl_seconds
 
@@ -157,6 +161,8 @@ kv.del("token")
 RSA credential decryption.
 
 ```lua
+local crypto = require("crypto")
+
 -- Decrypt credential encrypted with RSA-OAEP + AES-GCM
 local plaintext = crypto.decrypt_credential("key_name", encrypted_data)
 ```

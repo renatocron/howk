@@ -23,6 +23,8 @@ Simply forward incoming JSON to another endpoint.
 
 ```lua
 -- Echo transformer - forwards payload unchanged
+local json = require("json")
+
 local data = json.decode(incoming)
 howk.post("https://httpbin.org/post", data)
 ```
@@ -44,6 +46,8 @@ Only process specific event types.
 
 ```lua
 -- Only forward "critical" severity events
+local json = require("json")
+
 local ok, data = pcall(json.decode, incoming)
 if not ok then
     return  -- Silently drop invalid JSON
@@ -67,6 +71,8 @@ Route different events to different endpoints.
 
 ```lua
 -- Route events based on 'type' field
+local json = require("json")
+
 local ok, event = pcall(json.decode, incoming)
 if not ok then
     log.error("Invalid JSON")
@@ -99,6 +105,8 @@ Transform the payload before forwarding.
 
 ```lua
 -- Transform GitHub webhook to internal format
+local json = require("json")
+
 local ok, github = pcall(json.decode, incoming)
 if not ok then
     log.error("Invalid GitHub payload")
@@ -129,6 +137,8 @@ howk.post("https://platform.internal/events", internal)
 ### Pattern 1: Graceful Degradation
 
 ```lua
+local json = require("json")
+
 local ok, data = pcall(json.decode, incoming)
 if not ok then
     -- Log error but don't crash
@@ -149,6 +159,8 @@ end
 ### Pattern 2: Validation with Early Return
 
 ```lua
+local json = require("json")
+
 local ok, data = pcall(json.decode, incoming)
 if not ok then
     log.error("JSON parse failed", {error = tostring(data)})
@@ -173,6 +185,9 @@ howk.post("https://api.internal/process", data)
 ### Pattern 3: Try/Catch for HTTP Calls
 
 ```lua
+local json = require("json")
+local http = require("http")
+
 local data = json.decode(incoming)
 
 -- Try to enrich with user data
@@ -196,6 +211,8 @@ howk.post("https://webhook.internal/event", data)
 ### Extract Specific Headers
 
 ```lua
+local json = require("json")
+
 -- Get authentication info from headers
 local auth_header = headers["Authorization"]
 local event_type = headers["X-Webhook-Event"]
@@ -218,6 +235,8 @@ howk.post("https://internal.webhook/process", {
 ### Validate Webhook Signature (HMAC)
 
 ```lua
+local json = require("json")
+
 -- Simple HMAC validation (requires crypto module setup)
 local function validate_signature(body, signature, secret)
     -- Note: This is a placeholder - actual HMAC requires specific crypto
@@ -245,6 +264,9 @@ howk.post("https://internal.webhook/process", data)
 ### Deduplication
 
 ```lua
+local json = require("json")
+local kv = require("kv")
+
 -- Prevent duplicate webhook processing
 local data = json.decode(incoming)
 local dedup_key = "dedup:" .. (data.id or "")
@@ -266,6 +288,9 @@ howk.post("https://api.internal/webhook", data)
 ### Rate Limiting
 
 ```lua
+local json = require("json")
+local kv = require("kv")
+
 -- Simple rate limiting per user
 local data = json.decode(incoming)
 local user_id = data.user_id
@@ -294,6 +319,9 @@ howk.post("https://api.internal/webhook", data)
 ### State Persistence
 
 ```lua
+local json = require("json")
+local kv = require("kv")
+
 -- Track sequence numbers for ordered processing
 local data = json.decode(incoming)
 local stream_id = data.stream_id
@@ -326,6 +354,9 @@ kv.set(last_seq_key, tostring(sequence), 86400)
 ### Enrich Payload with External Data
 
 ```lua
+local json = require("json")
+local http = require("http")
+
 local data = json.decode(incoming)
 
 -- Fetch additional user info
@@ -348,6 +379,9 @@ howk.post("https://analytics.internal/track", data)
 ### Conditional Processing Based on External State
 
 ```lua
+local json = require("json")
+local http = require("http")
+
 local data = json.decode(incoming)
 
 -- Check if feature flag is enabled
@@ -379,6 +413,8 @@ howk.post("https://api.internal/feature-events", data)
 Send one event to multiple destinations.
 
 ```lua
+local json = require("json")
+
 local data = json.decode(incoming)
 
 -- Define destinations
@@ -482,6 +518,8 @@ hey -n 1000 -c 10 \
 ### 1. Not Using pcall for json.decode
 
 ```lua
+local json = require("json")
+
 -- BAD - will crash on invalid JSON
 local data = json.decode(incoming)
 
