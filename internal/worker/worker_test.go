@@ -4,6 +4,7 @@ package worker_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -204,9 +205,19 @@ func (m *MockHotState) Close() error {
 	return args.Error(0)
 }
 
+// GetScript defaults to "not found" when a test has not registered an
+// expectation for it. The worker now consults the script loader on every
+// delivery (to resolve _delivery_query_params / _delivery_headers in
+// script_config), and most tests do not care about overrides — this default
+// keeps them silent without forcing each test to wire a Maybe() expectation.
 func (m *MockHotState) GetScript(ctx context.Context, configID domain.ConfigID) (string, error) {
-	args := m.Called(ctx, configID)
-	return args.String(0), args.Error(1)
+	for _, expected := range m.ExpectedCalls {
+		if expected.Method == "GetScript" {
+			args := m.Called(ctx, configID)
+			return args.String(0), args.Error(1)
+		}
+	}
+	return "", errors.New("not found")
 }
 
 func (m *MockHotState) SetScript(ctx context.Context, configID domain.ConfigID, scriptJSON string, ttl time.Duration) error {

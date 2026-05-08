@@ -277,8 +277,18 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		logger.Debug().Msg("Script transformation applied successfully")
 	}
 
+	// Resolve delivery-time overrides. Templates are resolved against the
+	// worker's process environment here so secrets never enter Kafka. The
+	// original webhook (bare endpoint) remains the storage-canonical record;
+	// only the transient `deliverable` carries the resolved values for the
+	// HTTP call.
+	deliverable := webhook
+	if ov := w.lookupDeliveryOverrides(ctx, &webhook); !ov.IsEmpty() {
+		deliverable = delivery.ApplyOverrides(&webhook, ov)
+	}
+
 	// Deliver the webhook
-	result := w.delivery.Deliver(ctx, &webhook)
+	result := w.delivery.Deliver(ctx, &deliverable)
 
 	// Build delivery result
 	deliveryResult := &domain.DeliveryResult{
@@ -533,22 +543,24 @@ func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webho
 			// Retryable failure: Snapshot the active state for reconstruction
 			// Use nanosecond timestamp for LWW conflict resolution
 			snapshot := &domain.WebhookStateSnapshot{
-				WebhookID:      webhook.ID,
-				ConfigID:       webhook.ConfigID,
-				Endpoint:       webhook.Endpoint,
-				EndpointHash:   webhook.EndpointHash,
-				Payload:        webhook.Payload,
-				Headers:        webhook.Headers,
-				IdempotencyKey: webhook.IdempotencyKey,
-				SigningSecret:  webhook.SigningSecret,
-				ScriptHash:     webhook.ScriptHash,
-				State:          state,
-				Attempt:        webhook.Attempt,
-				MaxAttempts:    webhook.MaxAttempts,
-				CreatedAt:      webhook.CreatedAt,
-				NextRetryAt:    status.NextRetryAt,
-				LastError:      status.LastError,
-				UpdatedAtNs:    time.Now().UnixNano(), // LWW timestamp
+				WebhookID:           webhook.ID,
+				ConfigID:            webhook.ConfigID,
+				Endpoint:            webhook.Endpoint,
+				EndpointHash:        webhook.EndpointHash,
+				Payload:             webhook.Payload,
+				Headers:             webhook.Headers,
+				IdempotencyKey:      webhook.IdempotencyKey,
+				SigningSecret:       webhook.SigningSecret,
+				ScriptHash:          webhook.ScriptHash,
+				DeliveryQueryParams: webhook.DeliveryQueryParams,
+				DeliveryHeaders:     webhook.DeliveryHeaders,
+				State:               state,
+				Attempt:             webhook.Attempt,
+				MaxAttempts:         webhook.MaxAttempts,
+				CreatedAt:           webhook.CreatedAt,
+				NextRetryAt:         status.NextRetryAt,
+				LastError:           status.LastError,
+				UpdatedAtNs:         time.Now().UnixNano(), // LWW timestamp
 			}
 
 			if err := w.publisher.PublishState(pubCtx, snapshot); err != nil {
@@ -808,4 +820,35 @@ func (w *Worker) GetDelivery() delivery.Deliverer {
 
 func (w *Worker) GetRetry() retry.Retrier {
 	return w.retry
+}
+
+// lookupDeliveryOverrides resolves the static delivery-time overrides for a
+// webhook. Two sources are checked, in order:
+//
+//  1. Templates attached to the Webhook itself (set by the API-side
+//     transformer from its companion .json — see transformer.Engine). This is
+//     the typical path for disk-mounted transformer configs that never reach
+//     the worker via Kafka.
+//  2. Fallback: the worker-side script loader, populated from `howk.scripts`
+//     (deployed via POST /internal/scripts) — the reserved
+//     _delivery_query_params / _delivery_headers entries in script_config.
+//
+// In both cases env vars are resolved at HTTP-send time so secrets never
+// enter Kafka. Returns nil when neither source carries any overrides.
+func (w *Worker) lookupDeliveryOverrides(ctx context.Context, webhook *domain.Webhook) *delivery.Overrides {
+	// Source 1: templates attached to the webhook by the transformer.
+	if len(webhook.DeliveryQueryParams) > 0 || len(webhook.DeliveryHeaders) > 0 {
+		return delivery.ResolveTemplates(webhook.DeliveryQueryParams, webhook.DeliveryHeaders)
+	}
+
+	// Source 2: loader-resolved script_config.
+	if w.scriptEngine == nil {
+		return nil
+	}
+	w.scriptEngine.EnsureScript(ctx, webhook.ConfigID, w.hotstate)
+	cfg, err := w.scriptEngine.GetLoader().GetScript(webhook.ConfigID)
+	if err != nil || cfg == nil {
+		return nil
+	}
+	return delivery.ExtractOverrides(cfg.ScriptConfig)
 }

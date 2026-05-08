@@ -41,6 +41,13 @@ func setupWorkerWithMocks(t *testing.T) (*worker.Worker, *MockPublisher, *MockHo
 	mockPublisher.On("PublishState", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockPublisher.On("PublishStateTombstone", mock.Anything, mock.Anything).Return(nil).Maybe()
 
+	// Worker now consults the script loader on every delivery to resolve any
+	// _delivery_query_params / _delivery_headers in script_config. When the
+	// loader cache misses, EnsureScript falls back to hotstate.GetScript;
+	// tests that do not register a config should silently see "not found".
+	mockHotState.On("GetScript", mock.Anything, mock.Anything).
+		Return("", errors.New("not found")).Maybe()
+
 	// Create a test script engine with disabled config
 	testScriptLoader := script.NewLoader()
 	testScriptEngine := script.NewEngine(config.LuaConfig{Enabled: false}, testScriptLoader, nil, nil, nil, zerolog.Logger{})

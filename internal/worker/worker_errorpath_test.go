@@ -126,6 +126,10 @@ func setupWorkerForScriptTest(t *testing.T, luaEnabled bool) (
 	mockHotState.On("CircuitBreaker").Return(mockCircuitBreaker)
 	mockPublisher.On("PublishState", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockPublisher.On("PublishStateTombstone", mock.Anything, mock.Anything).Return(nil).Maybe()
+	// Default: delivery-override lookup silently misses unless a test registers
+	// a config in the loader (see worker.lookupDeliveryOverrides).
+	mockHotState.On("GetScript", mock.Anything, mock.Anything).
+		Return("", errors.New("not found")).Maybe()
 
 	loader := script.NewLoader()
 	engine := script.NewEngine(cfg.Lua, loader, nil, nil, nil, zerolog.Logger{})
