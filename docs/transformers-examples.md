@@ -12,6 +12,7 @@ Copy-paste ready examples for common use cases.
 - [Working with Headers](#working-with-headers)
 - [KV Store Usage](#kv-store-usage)
 - [HTTP Calls from Scripts](#http-calls-from-scripts)
+- [Delivery-Time Secret Injection](#delivery-time-secret-injection)
 
 ---
 
@@ -442,6 +443,103 @@ end
 
 -- All 4 webhooks created
 ```
+
+---
+
+## Delivery-Time Secret Injection
+
+When the destination puts secrets in the URL or headers (Google Chat, Slack incoming webhooks, Discord, internal services keyed by query string), keep them out of Kafka by declaring **unresolved templates** in the transformer's `.json`. The worker resolves them against its process env at HTTP-send time. See [transformers.md → Delivery-Time Overrides](transformers.md#delivery-time-overrides-keep-secrets-out-of-kafka) for the full contract.
+
+### Google Chat space (URL-keyed)
+
+**File:** `/etc/howk/transformers/gondola-google-chat.lua`
+
+```lua
+local json = require("json")
+
+local ok, data = pcall(json.decode, incoming)
+if not ok then
+    log.error("Invalid JSON")
+    return
+end
+
+howk.post(
+  "https://chat.googleapis.com/v1/spaces/AAQAIYOJwdQ/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+  { text = data.text or "(no text)" }
+)
+```
+
+**File:** `/etc/howk/transformers/gondola-google-chat.json`
+
+```json
+{
+  "allowed_domains": ["chat.googleapis.com"],
+  "_delivery_query_params": {
+    "key":   "${GONDOLA_GOOGLE_CHAT_KEY}",
+    "token": "${GONDOLA_GOOGLE_CHAT_TOKEN}"
+  }
+}
+```
+
+**Worker env (only on the worker pod):**
+
+```bash
+export GONDOLA_GOOGLE_CHAT_KEY=AIza...
+export GONDOLA_GOOGLE_CHAT_TOKEN=abc...
+```
+
+The webhook stored on Kafka carries the bare URL plus the unresolved `${...}` templates; the URL on the wire carries `&key=...&token=...`.
+
+### Slack incoming webhook (URL-keyed)
+
+Slack incoming webhooks already embed the secret in the path. The same pattern works if you'd rather keep the secret out of Kafka and inject the path segment via header or alternative scheme — here we show the equivalent using a separate token query param against an internal proxy:
+
+**File:** `/etc/howk/transformers/slack-alerts.lua`
+
+```lua
+local json = require("json")
+
+local data = json.decode(incoming)
+howk.post("https://slack-proxy.internal/services/T000/B000/post", {
+    text       = data.message,
+    username   = "howk",
+    icon_emoji = ":bell:"
+})
+```
+
+**File:** `/etc/howk/transformers/slack-alerts.json`
+
+```json
+{
+  "allowed_domains": ["slack-proxy.internal"],
+  "_delivery_query_params": {
+    "token": "${SLACK_PROXY_TOKEN}"
+  },
+  "_delivery_headers": {
+    "Authorization": "Bearer ${SLACK_PROXY_BEARER}"
+  }
+}
+```
+
+Both reserved keys can be combined; either one alone is fine. Empty resolutions (missing env var) are dropped instead of sent as empty values.
+
+### Authorization-header pattern (header-keyed)
+
+For destinations that take a Bearer token in `Authorization`:
+
+**File:** `/etc/howk/transformers/internal-api.json`
+
+```json
+{
+  "allowed_domains": ["api.internal.example.com"],
+  "_delivery_headers": {
+    "Authorization":   "Bearer ${INTERNAL_API_TOKEN}",
+    "X-Tenant-Secret": "${INTERNAL_TENANT_SECRET}"
+  }
+}
+```
+
+The header value is added to the outbound request headers and overrides any header with the same name set earlier in the pipeline.
 
 ---
 

@@ -5,6 +5,19 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-05-08
+
+### Added
+- **Delivery-time overrides for query params and headers**: Transformer `.json` files (and worker-side `script_config`) may now declare reserved `_delivery_query_params` and `_delivery_headers` maps holding **unresolved** `${VAR_NAME}` templates. The worker resolves them against its own process environment at HTTP-send time and merges them into the outbound URL / headers. The Webhook record on Kafka, retry data, and `DeliveryResult` continue to carry the bare endpoint — secrets never leave the worker.
+  - New package `internal/delivery/overrides.go` with `ExtractTemplates`, `ResolveTemplates`, `ApplyOverrides`.
+  - New `Webhook.DeliveryQueryParams` / `Webhook.DeliveryHeaders` fields and matching `WebhookStateSnapshot` fields, so retries and reconciliation re-apply overrides.
+  - Two activation paths: templates attached to the Webhook by the API-side transformer (typical), or `script_config` published via `PUT /config/:config_id/script` (fallback).
+  - Existing query params on the endpoint are preserved on merge; empty resolutions are dropped (no `?key=`); colliding header keys are overridden.
+  - See [docs/transformers.md](docs/transformers.md#delivery-time-overrides-keep-secrets-out-of-kafka) and [docs/transformers-examples.md](docs/transformers-examples.md#delivery-time-secret-injection).
+
+### Security
+- Storage invariant: the persisted webhook records (Kafka topics `howk.pending`, `howk.results`, `howk.state`, Redis retry data) only see templates and the bare endpoint, never the resolved secret values. The same env-var trust boundary documented in 0.4.4 applies — anyone with write access to a transformer `.json` or `script_config` can reference any env var visible to the worker process.
+
 ## [0.4.4] - 2026-04-17
 
 ### Added

@@ -301,6 +301,89 @@ local version = config.stripe_version or "default"
 log.info("Processing with Stripe version", {version = version})
 ```
 
+### Delivery-Time Overrides (Keep Secrets Out of Kafka)
+
+Some endpoints embed secrets directly in the URL (Google Chat, Slack incoming webhooks, Discord, internal services keyed by query string). Storing those URLs on Kafka would persist the secret — and Kafka is the audit log.
+
+HOWK solves this with **late-bound delivery overrides**: declare the secret-bearing query params and/or headers as **unresolved `${VAR_NAME}` templates** in the transformer's `.json`. The templates travel on the Webhook record (templates are not secrets), and the worker resolves them against its **own process environment at HTTP-send time**. The persisted webhook, retry data, and `DeliveryResult` only ever see the bare endpoint.
+
+#### Reserved keys
+
+Two keys in `[script].json` trigger this behavior. Both are stripped from `config.*` in Lua — they are consumed by the delivery layer, not the script:
+
+| Key | Effect |
+|-----|--------|
+| `_delivery_query_params` | Map of `name → "${ENV_VAR}"`. Merged into the URL query string at send time (existing query params on the endpoint are preserved; matching keys are overwritten). |
+| `_delivery_headers` | Map of `name → "${ENV_VAR}"`. Merged into outbound HTTP headers at send time (override webhook headers on key collision). |
+
+#### Example: Google Chat space
+
+`/etc/howk/transformers/gondola-google-chat.lua`:
+
+```lua
+local json = require("json")
+
+local data = json.decode(incoming)
+howk.post(
+  "https://chat.googleapis.com/v1/spaces/AAQAIYOJwdQ/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+  { text = data.text or "(no text)" }
+)
+```
+
+`/etc/howk/transformers/gondola-google-chat.json`:
+
+```json
+{
+  "allowed_domains": ["chat.googleapis.com"],
+  "_delivery_query_params": {
+    "key":   "${GONDOLA_GOOGLE_CHAT_KEY}",
+    "token": "${GONDOLA_GOOGLE_CHAT_TOKEN}"
+  }
+}
+```
+
+Worker environment:
+
+```bash
+export GONDOLA_GOOGLE_CHAT_KEY=AIza...
+export GONDOLA_GOOGLE_CHAT_TOKEN=abc...
+```
+
+What gets stored on Kafka (`Webhook.endpoint`):
+
+```
+https://chat.googleapis.com/v1/spaces/AAQAIYOJwdQ/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD
+```
+
+What the worker actually sends:
+
+```
+https://chat.googleapis.com/v1/spaces/AAQAIYOJwdQ/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD&key=AIza...&token=abc...
+```
+
+#### Behavior
+
+- **Templates only on Kafka.** The Webhook record carries `${VAR}` strings under `_delivery_query_params` / `_delivery_headers`. Resolved values exist only inside the transient struct passed to the HTTP client.
+- **Existing query params preserved.** `messageReplyOption=...` survives the merge; only matching keys are overwritten.
+- **Empty resolutions are dropped.** A missing env var produces no `?key=` (rather than `?key=`), preventing accidental empty-value sends.
+- **Headers override webhook headers** on key collision (e.g. `Authorization`).
+- **Retries and reconciliation re-apply overrides.** The templates ride along on `WebhookStateSnapshot`, so a worker rebuilding state from `howk.state` or replaying a retry produces the same outbound URL.
+- **Opt-in.** Webhooks with no overrides (no transformer, or a transformer whose `.json` lacks the reserved keys) are unaffected.
+
+#### Where overrides are read from
+
+The worker checks two sources, in order:
+
+1. **Templates attached to the Webhook itself** — set by the API-side transformer from its companion `.json`. This is the typical disk-mount path (the example above).
+2. **Worker-side script loader** — overrides declared in `script_config` for a published worker script (`PUT /config/:config_id/script`, topic `howk.scripts`). Useful when the same secret-bearing endpoint is shared by multiple namespaced webhook configs that resolve to the same script via namespace fallback.
+
+#### Security notes
+
+- Templates are **not** secrets; treat env var **names** as public.
+- Anyone with write access to the transformer's `.json` can reference any env var visible to the worker process. Restrict who can deploy transformer configs.
+- Pair this with `allowed_domains` so a script can't be edited to exfiltrate secrets to an attacker-controlled host.
+- Use `extraEnvFrom` (Helm) or your secret manager of choice to inject the env vars into the worker pods only — the API does not need them.
+
 ## Authentication ([script].passwd)
 
 Protect scripts with HTTP Basic Auth:
