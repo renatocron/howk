@@ -17,6 +17,7 @@ import (
 
 	"github.com/howk/howk/internal/broker"
 	"github.com/howk/howk/internal/config"
+	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/luasandbox"
@@ -269,13 +270,22 @@ func (e *Engine) makePostFn(script *TransformerScript, result *ExecutionResult) 
 			configID = domain.ConfigID(script.Name) // Default to script name
 		}
 
+		// Read _delivery_query_params / _delivery_headers from the script's
+		// .json config and attach the unresolved templates to the emitted
+		// Webhook. The worker resolves them against its own process env at
+		// HTTP-send time so the resolved secrets never enter Kafka. Templates
+		// themselves (e.g. "${GONDOLA_GOOGLE_CHAT_KEY}") are not secrets.
+		dqp, dhd := delivery.ExtractTemplates(script.Config)
+
 		webhook := domain.NewWebhook(domain.NewWebhookOpts{
-			ConfigID:      configID,
-			Endpoint:      endpoint,
-			Payload:       json.RawMessage(payload),
-			Headers:       opts.Headers,
-			SigningSecret: opts.SigningSecret,
-			MaxAttempts:   opts.MaxAttempts,
+			ConfigID:            configID,
+			Endpoint:            endpoint,
+			Payload:             json.RawMessage(payload),
+			Headers:             opts.Headers,
+			SigningSecret:       opts.SigningSecret,
+			MaxAttempts:         opts.MaxAttempts,
+			DeliveryQueryParams: dqp,
+			DeliveryHeaders:     dhd,
 		})
 		webhookID := webhook.ID
 

@@ -38,6 +38,14 @@ type Webhook struct {
 
 	// Script execution
 	ScriptHash string `json:"script_hash,omitempty"` // SHA256 of lua_code, indicates transformation expected
+
+	// Late-bound delivery overrides. Both maps hold UNRESOLVED templates of
+	// the form ${VAR_NAME}; the worker resolves them against its process
+	// environment at HTTP-send time so secrets never enter Kafka. Set by the
+	// API-side transformer from its companion .json (_delivery_query_params /
+	// _delivery_headers) and propagated through retry/state-snapshot paths.
+	DeliveryQueryParams map[string]string `json:"_delivery_query_params,omitempty"`
+	DeliveryHeaders     map[string]string `json:"_delivery_headers,omitempty"`
 }
 
 // DeliveryResult represents the outcome of a delivery attempt
@@ -153,14 +161,16 @@ const defaultMaxAttempts = 20
 // Zero values produce sensible defaults: MaxAttempts → 20, Attempt → 0,
 // CreatedAt/ScheduledAt → time.Now().
 type NewWebhookOpts struct {
-	ConfigID       ConfigID
-	Endpoint       string
-	Payload        json.RawMessage
-	Headers        map[string]string
-	IdempotencyKey string
-	SigningSecret  string
-	ScriptHash     string
-	MaxAttempts    int
+	ConfigID            ConfigID
+	Endpoint            string
+	Payload             json.RawMessage
+	Headers             map[string]string
+	IdempotencyKey      string
+	SigningSecret       string
+	ScriptHash          string
+	MaxAttempts         int
+	DeliveryQueryParams map[string]string
+	DeliveryHeaders     map[string]string
 }
 
 // NewWebhook constructs a Webhook with a fresh ULID identifier, a consistent
@@ -175,19 +185,21 @@ func NewWebhook(opts NewWebhookOpts) *Webhook {
 
 	now := time.Now()
 	return &Webhook{
-		ID:             WebhookID("wh_" + ulid.Make().String()),
-		ConfigID:       opts.ConfigID,
-		Endpoint:       opts.Endpoint,
-		EndpointHash:   HashEndpoint(opts.Endpoint),
-		Payload:        opts.Payload,
-		Headers:        opts.Headers,
-		IdempotencyKey: opts.IdempotencyKey,
-		SigningSecret:  opts.SigningSecret,
-		ScriptHash:     opts.ScriptHash,
-		Attempt:        0,
-		MaxAttempts:    maxAttempts,
-		CreatedAt:      now,
-		ScheduledAt:    now,
+		ID:                  WebhookID("wh_" + ulid.Make().String()),
+		ConfigID:            opts.ConfigID,
+		Endpoint:            opts.Endpoint,
+		EndpointHash:        HashEndpoint(opts.Endpoint),
+		Payload:             opts.Payload,
+		Headers:             opts.Headers,
+		IdempotencyKey:      opts.IdempotencyKey,
+		SigningSecret:       opts.SigningSecret,
+		ScriptHash:          opts.ScriptHash,
+		DeliveryQueryParams: opts.DeliveryQueryParams,
+		DeliveryHeaders:     opts.DeliveryHeaders,
+		Attempt:             0,
+		MaxAttempts:         maxAttempts,
+		CreatedAt:           now,
+		ScheduledAt:         now,
 	}
 }
 
@@ -262,11 +274,13 @@ type WebhookStateSnapshot struct {
 	EndpointHash EndpointHash `json:"endpoint_hash"`
 
 	// Request Data (Required to reconstruct the call)
-	Payload        json.RawMessage   `json:"payload"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	IdempotencyKey string            `json:"idempotency_key,omitempty"`
-	SigningSecret  string            `json:"signing_secret,omitempty"`
-	ScriptHash     string            `json:"script_hash,omitempty"`
+	Payload             json.RawMessage   `json:"payload"`
+	Headers             map[string]string `json:"headers,omitempty"`
+	IdempotencyKey      string            `json:"idempotency_key,omitempty"`
+	SigningSecret       string            `json:"signing_secret,omitempty"`
+	ScriptHash          string            `json:"script_hash,omitempty"`
+	DeliveryQueryParams map[string]string `json:"_delivery_query_params,omitempty"`
+	DeliveryHeaders     map[string]string `json:"_delivery_headers,omitempty"`
 
 	// State Info
 	State       WebhookState `json:"state"`

@@ -236,19 +236,21 @@ func (r *Reconciler) restoreState(ctx context.Context, snap *domain.WebhookState
 	if snap.State == domain.StateFailed && snap.NextRetryAt != nil {
 		// Reconstruct webhook for retry scheduling
 		webhook := &domain.Webhook{
-			ID:             snap.WebhookID,
-			ConfigID:       snap.ConfigID,
-			Endpoint:       snap.Endpoint,
-			EndpointHash:   snap.EndpointHash,
-			Payload:        snap.Payload,
-			Headers:        snap.Headers,
-			IdempotencyKey: snap.IdempotencyKey,
-			SigningSecret:  snap.SigningSecret,
-			ScriptHash:     snap.ScriptHash,
-			Attempt:        snap.Attempt,
-			MaxAttempts:    snap.MaxAttempts,
-			CreatedAt:      snap.CreatedAt,
-			ScheduledAt:    *snap.NextRetryAt,
+			ID:                  snap.WebhookID,
+			ConfigID:            snap.ConfigID,
+			Endpoint:            snap.Endpoint,
+			EndpointHash:        snap.EndpointHash,
+			Payload:             snap.Payload,
+			Headers:             snap.Headers,
+			IdempotencyKey:      snap.IdempotencyKey,
+			SigningSecret:       snap.SigningSecret,
+			ScriptHash:          snap.ScriptHash,
+			DeliveryQueryParams: snap.DeliveryQueryParams,
+			DeliveryHeaders:     snap.DeliveryHeaders,
+			Attempt:             snap.Attempt,
+			MaxAttempts:         snap.MaxAttempts,
+			CreatedAt:           snap.CreatedAt,
+			ScheduledAt:         *snap.NextRetryAt,
 		}
 
 		// Ensure retry data exists in Redis (compressed)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/howk/howk/internal/config"
+	"github.com/howk/howk/internal/delivery"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/mocks"
 	lua "github.com/yuin/gopher-lua"
@@ -148,6 +149,49 @@ func TestEngine_Execute_PostCreatesWebhook(t *testing.T) {
 
 	pub.AssertExpectations(t)
 	hs.AssertExpectations(t)
+}
+
+// TestEngine_Execute_AttachesDeliveryTemplates verifies that
+// _delivery_query_params and _delivery_headers from the transformer's .json
+// config are attached as UNRESOLVED templates to the emitted Webhook. This
+// is the disk-mount path: the worker resolves env vars at HTTP-send time, so
+// the templates may safely be persisted on Kafka.
+func TestEngine_Execute_AttachesDeliveryTemplates(t *testing.T) {
+	e, pub, hs := newEngineWithMocks(t, 2*time.Second)
+
+	var capturedWebhook *domain.Webhook
+	pub.On("PublishWebhook", mock.Anything, mock.AnythingOfType("*domain.Webhook")).
+		Run(func(args mock.Arguments) {
+			capturedWebhook = args.Get(1).(*domain.Webhook)
+		}).Return(nil)
+	hs.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
+
+	script := &TransformerScript{
+		Name:    "gondola-google-chat",
+		LuaCode: `howk.post("https://chat.googleapis.com/v1/spaces/X/messages", {text = "hi"})`,
+		Config: map[string]any{
+			"allowed_domains": []any{"chat.googleapis.com"},
+			delivery.OverrideQueryParamsKey: map[string]any{
+				"key":   "${GONDOLA_GOOGLE_CHAT_KEY}",
+				"token": "${GONDOLA_GOOGLE_CHAT_TOKEN}",
+			},
+			delivery.OverrideHeadersKey: map[string]any{
+				"X-Custom": "${GONDOLA_CUSTOM}",
+			},
+		},
+	}
+
+	_, err := e.Execute(context.Background(), script, []byte(`{}`), nil)
+	require.NoError(t, err)
+
+	require.NotNil(t, capturedWebhook)
+	// Templates remain unresolved on the persisted webhook.
+	assert.Equal(t, "${GONDOLA_GOOGLE_CHAT_KEY}", capturedWebhook.DeliveryQueryParams["key"])
+	assert.Equal(t, "${GONDOLA_GOOGLE_CHAT_TOKEN}", capturedWebhook.DeliveryQueryParams["token"])
+	assert.Equal(t, "${GONDOLA_CUSTOM}", capturedWebhook.DeliveryHeaders["X-Custom"])
+	// The bare endpoint persisted carries no resolved secret.
+	assert.NotContains(t, capturedWebhook.Endpoint, "key=")
+	assert.NotContains(t, capturedWebhook.Endpoint, "token=")
 }
 
 func TestEngine_Execute_SyntaxError(t *testing.T) {
