@@ -334,6 +334,20 @@ func (e *Engine) extractTransformation(L *lua.LState) *TransformResult {
 					})
 				}
 			}
+
+			// Extract request.retry_on_status — list of status codes the
+			// script wants the worker to treat as retryable in addition to
+			// the defaults in domain.IsRetryable (e.g. 401/403 for dynamic
+			// OAuth creds that may resolve on a fresh fetch).
+			if rs := tbl.RawGetString("retry_on_status"); rs != lua.LNil {
+				if rsTbl, ok := rs.(*lua.LTable); ok {
+					rsTbl.ForEach(func(_, v lua.LValue) {
+						if n, ok := v.(lua.LNumber); ok {
+							result.RetryOnStatus = append(result.RetryOnStatus, int(n))
+						}
+					})
+				}
+			}
 		}
 	}
 
@@ -393,6 +407,13 @@ func (e *Engine) applyTransformation(webhook *domain.Webhook, result *TransformR
 	// Remove headers marked for deletion (set to "" in Lua)
 	for _, k := range result.RemovedHeaders {
 		delete(transformed.Headers, k)
+	}
+
+	// Propagate script-declared retryable statuses onto the webhook so the
+	// retry strategy can consult them on this attempt and so they survive
+	// the retry round-trip via the webhook's JSON serialization.
+	if len(result.RetryOnStatus) > 0 {
+		transformed.RetryOnStatus = result.RetryOnStatus
 	}
 
 	// Note: OptOutDefaultHeaders will be handled by the delivery client

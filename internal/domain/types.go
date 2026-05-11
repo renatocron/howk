@@ -46,6 +46,12 @@ type Webhook struct {
 	// _delivery_headers) and propagated through retry/state-snapshot paths.
 	DeliveryQueryParams map[string]string `json:"_delivery_query_params,omitempty"`
 	DeliveryHeaders     map[string]string `json:"_delivery_headers,omitempty"`
+
+	// Per-delivery retry-classifier override. Populated by a Lua script via
+	// request.retry_on_status when credentials are dynamic (e.g. OAuth tokens)
+	// and a 4xx may resolve on retry with a fresh fetch. Merged on top of
+	// domain.IsRetryable() — it does NOT replace the default classifier.
+	RetryOnStatus []int `json:"retry_on_status,omitempty"`
 }
 
 // DeliveryResult represents the outcome of a delivery attempt
@@ -281,6 +287,7 @@ type WebhookStateSnapshot struct {
 	ScriptHash          string            `json:"script_hash,omitempty"`
 	DeliveryQueryParams map[string]string `json:"_delivery_query_params,omitempty"`
 	DeliveryHeaders     map[string]string `json:"_delivery_headers,omitempty"`
+	RetryOnStatus       []int             `json:"retry_on_status,omitempty"`
 
 	// State Info
 	State       WebhookState `json:"state"`

@@ -72,9 +72,50 @@ metadata.created_at    -- string: ISO8601 timestamp
 #### `request` Table
 
 ```lua
-request.body = "..."           -- string: Override outgoing body (supports binary)
-request.headers = {}           -- table: Additional/override headers
+request.body = "..."             -- string: Override outgoing body (supports binary)
+request.headers = {}             -- table: Additional/override headers
+request.retry_on_status = {401}  -- table: Status codes to treat as retryable
+                                 --        on top of the default classifier
+                                 --        (5xx, 408, 429). Useful when the
+                                 --        script fetches dynamic credentials
+                                 --        (OAuth tokens, signed URLs) that
+                                 --        a 401/403 may resolve on retry.
 ```
+
+##### `request.retry_on_status` — script-declared retryable statuses
+
+By default the worker only retries on 5xx, 408 and 429. A 401 or 403 is a
+client error and is sent straight to DLQ. That is wrong when the script
+resolves dynamic credentials (e.g. OAuth tokens cached via `kv`) — the right
+behavior is to invalidate the cache and refetch on the next attempt.
+
+Set `request.retry_on_status` to a list of status codes the worker should
+treat as retryable for THIS webhook only. The list is merged with the default
+classifier (it does not replace it), is persisted into the webhook record on
+Kafka, and survives the retry round-trip (including Redis-loss reconciliation
+via `WebhookStateSnapshot`).
+
+```lua
+-- Dynamic OAuth flow: token is short-lived, refetched if missing in kv.
+local kv = require("kv")
+local cache_key = "oauth:token:" .. metadata.config_id
+
+if metadata.attempt > 0 then
+    kv.del(cache_key)  -- invalidate stale token on every retry
+end
+
+local token = kv.get(cache_key) or fetch_new_token_and_cache(cache_key)
+request.headers["Authorization"] = "Bearer " .. token
+
+-- Tell the worker: don't DLQ on 401/403, retry instead. The kv.del above
+-- guarantees the next attempt fetches a fresh token.
+request.retry_on_status = {401, 403}
+```
+
+**Tradeoff to be aware of:** a permanently-broken credential will now consume
+`MaxAttempts × backoff` before reaching DLQ instead of failing fast on the
+first 401. If your script has a high `MaxAttempts`, consider lowering it for
+this config or designing a smaller auth-retry budget.
 
 #### `config` Table
 

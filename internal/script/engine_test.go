@@ -43,6 +43,38 @@ func TestEngine_Execute_SimpleHeaderTransform(t *testing.T) {
 	}
 }
 
+func TestEngine_Execute_RetryOnStatus(t *testing.T) {
+	cfg := config.LuaConfig{
+		Enabled: true,
+		Timeout: 1 * time.Second,
+	}
+
+	loader := NewLoader()
+	loader.SetScript(&Config{
+		ConfigID: "test_config",
+		LuaCode:  `request.retry_on_status = {401, 403}`,
+		Hash:     "rosretry",
+	})
+
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
+	defer engine.Close()
+
+	webhook := &domain.Webhook{
+		ConfigID: "test_config",
+		Payload:  json.RawMessage(`{}`),
+		Headers:  map[string]string{},
+	}
+
+	result, err := engine.Execute(context.Background(), webhook)
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+
+	if len(result.RetryOnStatus) != 2 || result.RetryOnStatus[0] != 401 || result.RetryOnStatus[1] != 403 {
+		t.Errorf("Expected RetryOnStatus=[401,403], got %v", result.RetryOnStatus)
+	}
+}
+
 func TestEngine_Execute_JSONTransform(t *testing.T) {
 	cfg := config.LuaConfig{
 		Enabled: true,

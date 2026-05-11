@@ -5,6 +5,15 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Script-declared retryable statuses (`request.retry_on_status`)**: Worker-side Lua scripts may now set `request.retry_on_status = {401, 403, ...}` to extend the default retry classifier on a per-webhook basis. Designed for scripts that resolve dynamic credentials (OAuth tokens, signed URLs cached via `kv`) where a 401/403 should invalidate the cache and refetch on the next attempt instead of going straight to DLQ.
+  - New `request.retry_on_status` Lua output, extracted in `internal/script/engine.go` and propagated through `internal/script/domain.go` `TransformResult.RetryOnStatus` onto the webhook.
+  - New `Webhook.RetryOnStatus` and `WebhookStateSnapshot.RetryOnStatus` fields, so the override survives the retry round-trip (Kafka, Redis retry data, and Redis-loss reconciliation).
+  - `internal/retry/strategy.go` `ShouldRetry` consults the override before falling back to `domain.IsRetryable`. The `MaxAttempts` gate still applies — the override widens the retry classifier, it does not bypass exhaustion.
+  - See [docs/LUA_ENGINE.md](docs/LUA_ENGINE.md#requestretry_on_status--script-declared-retryable-statuses) for usage and tradeoffs (a permanently-broken credential now consumes `MaxAttempts × backoff` before DLQ).
+
 ## [0.4.5] - 2026-05-08
 
 ### Added

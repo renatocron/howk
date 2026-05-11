@@ -74,8 +74,9 @@ func (t ScriptErrorType) IsRetryable() bool {
 
 // TransformResult represents the output of a script execution
 type TransformResult struct {
-	Body                   string            // Transformed payload (can be binary)
-	Headers                map[string]string // Additional/override headers
-	RemovedHeaders         []string          // Headers to remove (set to "" in Lua)
-	OptOutDefaultHeaders   bool              // Skip X-Webhook-* headers
+	Body                 string            // Transformed payload (can be binary)
+	Headers              map[string]string // Additional/override headers
+	RemovedHeaders       []string          // Headers to remove (set to "" in Lua)
+	OptOutDefaultHeaders bool              // Skip X-Webhook-* headers
+	RetryOnStatus        []int             // Status codes the script wants treated as retryable
 }

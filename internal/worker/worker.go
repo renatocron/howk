@@ -554,6 +554,7 @@ func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webho
 				ScriptHash:          webhook.ScriptHash,
 				DeliveryQueryParams: webhook.DeliveryQueryParams,
 				DeliveryHeaders:     webhook.DeliveryHeaders,
+				RetryOnStatus:       webhook.RetryOnStatus,
 				State:               state,
 				Attempt:             webhook.Attempt,
 				MaxAttempts:         webhook.MaxAttempts,

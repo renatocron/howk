@@ -3,6 +3,7 @@ package retry
 import (
 	"math"
 	"math/rand"
+	"slices"
 	"time"
 
 	"github.com/howk/howk/internal/config"
@@ -37,7 +38,13 @@ func (s *Strategy) ShouldRetry(webhook *domain.Webhook, statusCode int, err erro
 		return true
 	}
 
-	// Check status code
+	// Script-declared retryable statuses (e.g. 401/403 for dynamic OAuth creds
+	// whose next attempt will refetch a fresh token).
+	if slices.Contains(webhook.RetryOnStatus, statusCode) {
+		return true
+	}
+
+	// Check status code against the default classifier
 	return domain.IsRetryable(statusCode)
 }
 

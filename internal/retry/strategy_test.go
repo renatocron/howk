@@ -48,6 +48,27 @@ func TestShouldRetry(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("RetryOnStatusOverride", func(t *testing.T) {
+		// Script-declared retryable statuses (e.g. 401 for dynamic OAuth creds)
+		// should turn an otherwise-terminal 4xx into a retry.
+		wh := testutil.NewTestWebhook("http://example.com")
+		wh.RetryOnStatus = []int{401, 403}
+
+		assert.True(t, strategy.ShouldRetry(wh, 401, nil), "401 should be retryable when listed in RetryOnStatus")
+		assert.True(t, strategy.ShouldRetry(wh, 403, nil), "403 should be retryable when listed in RetryOnStatus")
+		assert.False(t, strategy.ShouldRetry(wh, 404, nil), "404 not listed → falls back to domain.IsRetryable → false")
+		// Default-retryable codes still retry even with override set.
+		assert.True(t, strategy.ShouldRetry(wh, 500, nil), "500 stays retryable via the default classifier")
+	})
+
+	t.Run("RetryOnStatusOverrideRespectsExhaustion", func(t *testing.T) {
+		// Override does NOT bypass the MaxAttempts gate.
+		wh := testutil.NewTestWebhook("http://example.com")
+		wh.RetryOnStatus = []int{401}
+		wh.Attempt = wh.MaxAttempts
+		assert.False(t, strategy.ShouldRetry(wh, 401, nil))
+	})
 }
 
 func TestNextDelay(t *testing.T) {
