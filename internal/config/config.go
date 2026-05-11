@@ -33,6 +33,30 @@ type Config struct {
 	Concurrency    ConcurrencyConfig    `mapstructure:"concurrency"`
 	Transformer    TransformerConfig    `mapstructure:"transformer"`
 	Metrics        MetricsConfig        `mapstructure:"metrics"`
+	DLQ            DLQConfig            `mapstructure:"dlq"`
+}
+
+// DLQConfig controls what is persisted to the dead letter topic when a webhook
+// is exhausted or hits an unrecoverable failure. Defaults are safe for an
+// open-source deployment: secret-bearing headers are redacted and the first
+// 1KB of the endpoint response body is included to help diagnose 4xx errors.
+type DLQConfig struct {
+	// RedactHeaders overrides the built-in DefaultSensitiveHeaders list. When
+	// set (even to a single name), it FULLY REPLACES the defaults — there is no
+	// implicit merge. Leave empty/unset to use the safe built-in list. Has no
+	// effect when DisableRedaction is true.
+	RedactHeaders []string `mapstructure:"redact_headers"`
+
+	// DisableRedaction turns off header redaction entirely. Use only when DLQ
+	// readers are trusted operators and full request fidelity is required for
+	// debugging. Default: false (redaction on).
+	DisableRedaction bool `mapstructure:"disable_redaction"`
+
+	// IncludeResponseBody controls whether the first 1KB of the endpoint
+	// response body (captured by delivery.Client) is attached to DLQ records.
+	// Useful for diagnosing 4xx errors, but receiver responses can contain PII
+	// in some deployments. Default: true.
+	IncludeResponseBody bool `mapstructure:"include_response_body"`
 }
 
 type APIConfig struct {
@@ -279,6 +303,12 @@ func DefaultConfig() *Config {
 			Enabled: false, // Feature flag - must be explicitly enabled
 			Port:    9090,
 		},
+		DLQ: DLQConfig{
+			// Empty RedactHeaders → falls back to domain.DefaultSensitiveHeaders
+			RedactHeaders:       nil,
+			DisableRedaction:    false,
+			IncludeResponseBody: true,
+		},
 	}
 }
 
@@ -429,6 +459,10 @@ func bindEnvVariables(v *viper.Viper) error {
 		// Metrics
 		"metrics.enabled",
 		"metrics.port",
+		// DLQ
+		"dlq.redact_headers",
+		"dlq.disable_redaction",
+		"dlq.include_response_body",
 	}
 
 	for _, key := range keys {

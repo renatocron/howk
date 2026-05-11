@@ -257,7 +257,64 @@ type DeadLetter struct {
 	ReasonType   DeadLetterReason `json:"reason_type"`   // Machine-readable type
 	LastError    string           `json:"last_error,omitempty"`
 	StatusCode   int              `json:"status_code,omitempty"`
+	ResponseBody string           `json:"response_body,omitempty"` // First 1KB of endpoint response — useful to diagnose 4xx
 	Time         time.Time        `json:"time"`
+}
+
+// DefaultSensitiveHeaders is the built-in list of header names whose values are
+// redacted before a webhook is persisted to the DLQ. Operators can override the
+// list via DLQConfig.RedactHeaders; this slice is the fallback when no override
+// is configured. Names are matched case-insensitively.
+var DefaultSensitiveHeaders = []string{
+	"Authorization",
+	"Proxy-Authorization",
+	"Cookie",
+	"Set-Cookie",
+	"X-API-Key",
+	"X-Auth-Token",
+}
+
+// RedactHeaders returns a shallow clone of headers with values of any header
+// whose name appears in redactNames replaced by "[REDACTED]". Matching is
+// case-insensitive. A nil/empty redactNames means "no redaction" — the headers
+// are still cloned (so the caller's map is independent), but no values change.
+// Returns nil when headers is nil.
+func RedactHeaders(headers map[string]string, redactNames []string) map[string]string {
+	if headers == nil {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	if len(redactNames) == 0 {
+		for k, v := range headers {
+			out[k] = v
+		}
+		return out
+	}
+	redactSet := make(map[string]struct{}, len(redactNames))
+	for _, n := range redactNames {
+		redactSet[strings.ToLower(n)] = struct{}{}
+	}
+	for k, v := range headers {
+		if _, ok := redactSet[strings.ToLower(k)]; ok {
+			out[k] = "[REDACTED]"
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// CloneForDLQ returns a shallow copy of the webhook with headers passed through
+// RedactHeaders so it is safe to publish to the dead letter topic. The original
+// webhook is left untouched. Pass nil/empty redactNames to skip redaction (the
+// clone is still independent of the original).
+func (w *Webhook) CloneForDLQ(redactNames []string) *Webhook {
+	if w == nil {
+		return nil
+	}
+	clone := *w
+	clone.Headers = RedactHeaders(w.Headers, redactNames)
+	return &clone
 }
 
 // SystemEpoch tracks when Redis state was last reconciled

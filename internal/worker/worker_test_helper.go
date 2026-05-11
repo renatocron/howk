@@ -25,3 +25,13 @@ func (w *Worker) RunConcurrencyGate(
 ) (acquired bool, err error) {
 	return w.runConcurrencyGate(ctx, webhook, isSlowLane, gate)
 }
+
+// BuildDeadLetterWebhook exports the private buildDeadLetterWebhook for unit testing.
+func (w *Worker) BuildDeadLetterWebhook(wh *domain.Webhook) *domain.Webhook {
+	return w.buildDeadLetterWebhook(wh)
+}
+
+// DLQResponseBody exports the private dlqResponseBody for unit testing.
+func (w *Worker) DLQResponseBody(body string) string {
+	return w.dlqResponseBody(body)
+}

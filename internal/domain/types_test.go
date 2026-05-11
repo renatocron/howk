@@ -263,3 +263,74 @@ func TestMatchesDomain_WildcardSubdomainCaseInsensitive(t *testing.T) {
     assert.True(t, domain.MatchesDomain("FOO.EXAMPLE.COM", "*.example.com"))
     assert.True(t, domain.MatchesDomain("foo.example.com", "*.EXAMPLE.COM"))
 }
+
+func TestRedactHeaders_DefaultsList(t *testing.T) {
+    in := map[string]string{
+        "Authorization":       "Bearer abc.def.ghi",
+        "authorization":       "Bearer lower",
+        "Proxy-Authorization": "Basic xxx",
+        "Cookie":              "session=secret",
+        "Set-Cookie":          "session=secret",
+        "X-API-Key":           "key-123",
+        "X-Auth-Token":        "tok-xyz",
+        "Content-Type":        "application/json",
+        "X-Trace-Id":          "abc-123",
+    }
+    out := domain.RedactHeaders(in, domain.DefaultSensitiveHeaders)
+
+    assert.Equal(t, "[REDACTED]", out["Authorization"])
+    assert.Equal(t, "[REDACTED]", out["authorization"])
+    assert.Equal(t, "[REDACTED]", out["Proxy-Authorization"])
+    assert.Equal(t, "[REDACTED]", out["Cookie"])
+    assert.Equal(t, "[REDACTED]", out["Set-Cookie"])
+    assert.Equal(t, "[REDACTED]", out["X-API-Key"])
+    assert.Equal(t, "[REDACTED]", out["X-Auth-Token"])
+    assert.Equal(t, "application/json", out["Content-Type"])
+    assert.Equal(t, "abc-123", out["X-Trace-Id"])
+
+    // Input map must not be mutated.
+    assert.Equal(t, "Bearer abc.def.ghi", in["Authorization"])
+}
+
+func TestRedactHeaders_CustomList_FullOverride(t *testing.T) {
+    in := map[string]string{
+        "Authorization":   "Bearer secret",
+        "X-Tenant-Secret": "tenant-123",
+    }
+    // Custom list does NOT include Authorization — Authorization stays visible.
+    out := domain.RedactHeaders(in, []string{"X-Tenant-Secret"})
+    assert.Equal(t, "Bearer secret", out["Authorization"])
+    assert.Equal(t, "[REDACTED]", out["X-Tenant-Secret"])
+}
+
+func TestRedactHeaders_EmptyList_NoRedaction(t *testing.T) {
+    in := map[string]string{"Authorization": "Bearer secret"}
+    out := domain.RedactHeaders(in, nil)
+    assert.Equal(t, "Bearer secret", out["Authorization"])
+    // Still returns a different map instance.
+    out["Authorization"] = "mutated"
+    assert.Equal(t, "Bearer secret", in["Authorization"])
+}
+
+func TestRedactHeaders_Nil(t *testing.T) {
+    assert.Nil(t, domain.RedactHeaders(nil, domain.DefaultSensitiveHeaders))
+}
+
+func TestWebhook_CloneForDLQ(t *testing.T) {
+    orig := &domain.Webhook{
+        ID:       "wh_1",
+        Endpoint: "https://example.com",
+        Headers: map[string]string{
+            "Authorization": "Bearer secret",
+            "X-Trace-Id":    "abc",
+        },
+    }
+    clone := orig.CloneForDLQ(domain.DefaultSensitiveHeaders)
+
+    assert.Equal(t, "[REDACTED]", clone.Headers["Authorization"])
+    assert.Equal(t, "abc", clone.Headers["X-Trace-Id"])
+    // Original headers untouched.
+    assert.Equal(t, "Bearer secret", orig.Headers["Authorization"])
+
+    assert.Nil(t, (*domain.Webhook)(nil).CloneForDLQ(domain.DefaultSensitiveHeaders))
+}

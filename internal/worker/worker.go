@@ -425,14 +425,17 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		// Update status
 		w.updateStatus(ctx, &webhook, domain.StateExhausted, deliveryResult)
 
-		// Send to dead letter queue
+		// Send to dead letter queue. Sensitive headers and response body
+		// inclusion are governed by config.DLQ — see buildDeadLetterWebhook
+		// and dlqResponseBody.
 		deadLetter := &domain.DeadLetter{
-			Webhook:    &webhook,
-			Reason:     reason,
-			ReasonType: reasonType,
-			LastError:  deliveryResult.Error,
-			StatusCode: result.StatusCode,
-			Time:       time.Now(),
+			Webhook:      w.buildDeadLetterWebhook(&webhook),
+			Reason:       reason,
+			ReasonType:   reasonType,
+			LastError:    deliveryResult.Error,
+			StatusCode:   result.StatusCode,
+			ResponseBody: w.dlqResponseBody(result.ResponseBody),
+			Time:         time.Now(),
 		}
 
 		if err := w.publisher.PublishDeadLetter(ctx, deadLetter); err != nil {
@@ -679,7 +682,7 @@ func (w *Worker) sendToDLQ(ctx context.Context, webhook *domain.Webhook, reasonT
 		Logger()
 
 	deadLetter := &domain.DeadLetter{
-		Webhook:    webhook,
+		Webhook:    w.buildDeadLetterWebhook(webhook),
 		Reason:     reasonMsg,
 		ReasonType: reasonType,
 		Time:       time.Now(),
@@ -705,6 +708,30 @@ func (w *Worker) sendToDLQ(ctx context.Context, webhook *domain.Webhook, reasonT
 
 	logger.Warn().Msg("Webhook sent to dead letter queue")
 	return nil
+}
+
+// buildDeadLetterWebhook returns the Webhook to attach to a DeadLetter record,
+// applying the redaction policy from config.DLQ. When redaction is disabled the
+// original pointer is returned; otherwise a clone with sensitive headers
+// redacted is returned so the original webhook in memory is unaffected.
+func (w *Worker) buildDeadLetterWebhook(wh *domain.Webhook) *domain.Webhook {
+	if w.config.DLQ.DisableRedaction {
+		return wh
+	}
+	names := w.config.DLQ.RedactHeaders
+	if len(names) == 0 {
+		names = domain.DefaultSensitiveHeaders
+	}
+	return wh.CloneForDLQ(names)
+}
+
+// dlqResponseBody returns the response body to attach to a DeadLetter record,
+// honoring the config.DLQ.IncludeResponseBody flag.
+func (w *Worker) dlqResponseBody(body string) string {
+	if !w.config.DLQ.IncludeResponseBody {
+		return ""
+	}
+	return body
 }
 
 // ErrDiverted is a sentinel error returned by runConcurrencyGate when the

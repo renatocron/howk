@@ -79,3 +79,19 @@ lua:
     # API_KEY: /etc/howk/keys/api.pem
   http_timeout: 5s           # Timeout for HTTP module requests
   kv_ttl_default: 24h        # Default TTL for KV module storage
+
+# Dead Letter Queue configuration
+# Controls what is persisted to the `howk.deadletter` topic. Defaults are safe:
+# secret-bearing headers are redacted and the first 1KB of the endpoint
+# response body is attached (helpful for diagnosing 4xx errors).
+dlq:
+  # Optional FULL OVERRIDE of the built-in redact list (case-insensitive).
+  # Built-in defaults (used when this is empty/unset):
+  #   Authorization, Proxy-Authorization, Cookie, Set-Cookie, X-API-Key, X-Auth-Token
+  # Setting this replaces the defaults entirely — include Authorization yourself.
+  # redact_headers:
+  #   - Authorization
+  #   - X-Tenant-Secret
+
+  disable_redaction: false        # Turn off header redaction entirely (full request fidelity, no masking)
+  include_response_body: true     # Attach first 1KB of endpoint response body to DLQ records
