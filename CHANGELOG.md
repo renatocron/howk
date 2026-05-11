@@ -5,7 +5,7 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.6] - 2026-05-11
 
 ### Added
 - **Script-declared retryable statuses (`request.retry_on_status`)**: Worker-side Lua scripts may now set `request.retry_on_status = {401, 403, ...}` to extend the default retry classifier on a per-webhook basis. Designed for scripts that resolve dynamic credentials (OAuth tokens, signed URLs cached via `kv`) where a 401/403 should invalidate the cache and refetch on the next attempt instead of going straight to DLQ.
