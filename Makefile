@@ -188,11 +188,31 @@ clean:
 # =============================================================================
 
 DOCKER_HUB_USER ?= renatocron
-VERSION ?= latest
+
+# VERSION defaults to the most recent annotated git tag (e.g. v0.4.7). The
+# Helm chart pins v-prefixed tags, so the guard below blocks accidental pushes
+# of a bare semver (which produced the v0.4.7 ImagePullBackOff incident).
+# Override explicitly when cutting a pre-release: make dockerhub-push VERSION=v0.4.8-rc1
+VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
+
+# Guard: VERSION must be "latest" or start with "v". Prevents bare-semver
+# tags (e.g. "0.4.7") that won't match the Helm chart's `v0.4.7` pin.
+_check-docker-version:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "ERROR: VERSION is empty and no git tag was found."; \
+		echo "Pass VERSION=v0.x.y on the command line, or create an annotated tag first."; \
+		exit 1; \
+	fi
+	@case "$(VERSION)" in \
+		latest|v*) ;; \
+		*) echo "ERROR: VERSION must start with 'v' (got: $(VERSION))."; \
+		   echo "The Helm chart pins v-prefixed tags. Try VERSION=v$(VERSION) or omit VERSION to use the latest git tag."; \
+		   exit 1;; \
+	esac
 
 # Build all images for Docker Hub
-dockerhub-build:
-	@echo "Building images for Docker Hub ($(DOCKER_HUB_USER))..."
+dockerhub-build: _check-docker-version
+	@echo "Building images for Docker Hub ($(DOCKER_HUB_USER)) tag=$(VERSION)..."
 	docker build --target api -t $(DOCKER_HUB_USER)/howk-api:$(VERSION) .
 	docker build --target worker -t $(DOCKER_HUB_USER)/howk-worker:$(VERSION) .
 	docker build --target scheduler -t $(DOCKER_HUB_USER)/howk-scheduler:$(VERSION) .
@@ -200,15 +220,15 @@ dockerhub-build:
 
 # Push all images to Docker Hub
 dockerhub-push: dockerhub-build
-	@echo "Pushing images to Docker Hub..."
+	@echo "Pushing images to Docker Hub tag=$(VERSION)..."
 	docker push $(DOCKER_HUB_USER)/howk-api:$(VERSION)
 	docker push $(DOCKER_HUB_USER)/howk-worker:$(VERSION)
 	docker push $(DOCKER_HUB_USER)/howk-scheduler:$(VERSION)
 	docker push $(DOCKER_HUB_USER)/howk-reconciler:$(VERSION)
 
 # Build and push multi-arch images (requires buildx)
-dockerhub-buildx:
-	@echo "Building multi-arch images for Docker Hub..."
+dockerhub-buildx: _check-docker-version
+	@echo "Building multi-arch images for Docker Hub tag=$(VERSION)..."
 	docker buildx build --platform linux/amd64,linux/arm64 --target api -t $(DOCKER_HUB_USER)/howk-api:$(VERSION) --push .
 	docker buildx build --platform linux/amd64,linux/arm64 --target worker -t $(DOCKER_HUB_USER)/howk-worker:$(VERSION) --push .
 	docker buildx build --platform linux/amd64,linux/arm64 --target scheduler -t $(DOCKER_HUB_USER)/howk-scheduler:$(VERSION) --push .
@@ -218,6 +238,16 @@ dockerhub-buildx:
 dockerhub-release: VERSION=latest
 dockerhub-release: dockerhub-push
 	@echo "Released $(VERSION) to Docker Hub"
+
+# Full release: push the versioned tag (from the latest git tag) and update :latest.
+# Run from a tagged commit. The version guard ensures the Helm chart's `v0.4.x`
+# pin will resolve on Docker Hub.
+release:
+	@VERSION=$$(git describe --tags --abbrev=0 2>/dev/null); \
+	if [ -z "$$VERSION" ]; then echo "ERROR: no git tag found; tag the release first."; exit 1; fi; \
+	echo "==> Releasing $$VERSION (versioned + latest) to Docker Hub..."; \
+	$(MAKE) dockerhub-push VERSION=$$VERSION; \
+	$(MAKE) dockerhub-release
 
 # =============================================================================
 # Helm Chart
