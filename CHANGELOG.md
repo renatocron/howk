@@ -5,6 +5,19 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2026-05-11
+
+### Added
+- **Configurable DLQ payload**: New `dlq` config section controls what is persisted to `howk.deadletter`, so 4xx failures can be diagnosed without re-running the request.
+  - `dlq.include_response_body` (default `true`): attaches the first 1KB of the endpoint response body (already captured by `delivery.Client`) to DLQ records via the new `DeadLetter.ResponseBody` field. Set to `false` if receiver responses can carry PII in your deployment.
+  - `dlq.redact_headers` (default unset → built-in safe list): full-override of the redacted-header list. Built-in defaults — `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`, `X-Auth-Token` — are exposed as `domain.DefaultSensitiveHeaders` and applied case-insensitively. Setting `redact_headers` *replaces* the defaults (include `Authorization` yourself).
+  - `dlq.disable_redaction` (default `false`): escape hatch for trusted-internal-only deployments wanting full request fidelity.
+  - New `domain.RedactHeaders(headers, names)` helper and `(*Webhook).CloneForDLQ(names)` keep the original webhook in memory untouched — only the DLQ-bound copy is redacted.
+  - Env vars: `HOWK_DLQ_REDACT_HEADERS`, `HOWK_DLQ_DISABLE_REDACTION`, `HOWK_DLQ_INCLUDE_RESPONSE_BODY`.
+
+### Security
+- Secret-bearing request headers (`Authorization`, etc.) are now redacted by default before webhooks are published to `howk.deadletter`. Existing deployments that relied on the previous behavior — full headers on the DLQ topic — must opt in via `dlq.disable_redaction: true` or a custom `dlq.redact_headers` list.
+
 ## [0.4.6] - 2026-05-11
 
 ### Added
