@@ -10,8 +10,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"strconv"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
@@ -100,6 +103,14 @@ func (c *Client) Deliver(ctx context.Context, webhook *domain.Webhook) *Result {
 		req.Header.Set("X-Webhook-Signature", signature)
 	}
 
+	// Debug: dump the exact outgoing request (request line, headers, body) as it
+	// will hit the wire — i.e. after Lua transformation, delivery-time overrides
+	// and signing. DumpRequestOut serializes the request and restores req.Body so
+	// the subsequent Do() still sends the payload.
+	if c.config.DumpRequests {
+		c.dumpRequest(req, webhook)
+	}
+
 	// Execute request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -118,6 +129,29 @@ func (c *Client) Deliver(ctx context.Context, webhook *domain.Webhook) *Result {
 		ResponseBody: string(bodyBytes),
 		Duration:     time.Since(start),
 	}
+}
+
+// dumpRequest logs the fully-assembled outgoing request for debugging. It uses
+// httputil.DumpRequestOut, which produces the exact bytes the transport would
+// write (including all headers added above) and transparently restores req.Body
+// so the real send is unaffected. The dump is logged as a single field so it is
+// easy to grep; note the body may contain sensitive data.
+func (c *Client) dumpRequest(req *http.Request, webhook *domain.Webhook) {
+	dump, err := httputil.DumpRequestOut(req, true)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("webhook_id", string(webhook.ID)).
+			Msg("Failed to dump outgoing request")
+		return
+	}
+
+	log.Info().
+		Str("webhook_id", string(webhook.ID)).
+		Str("endpoint", req.URL.String()).
+		Int("attempt", webhook.Attempt+1).
+		Str("request", string(dump)).
+		Msg("Outgoing webhook request (debug dump)")
 }
 
 // sign creates an HMAC-SHA256 signature

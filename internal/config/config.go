@@ -124,6 +124,14 @@ type DeliveryConfig struct {
 	IdleConnTimeout     time.Duration `mapstructure:"idle_conn_timeout"`
 	TLSHandshakeTimeout time.Duration `mapstructure:"tls_handshake_timeout"`
 	UserAgent           string        `mapstructure:"user_agent"`
+
+	// DumpRequests, when true, logs the exact outgoing HTTP request (request
+	// line, all headers, and body) just before it is sent — i.e. AFTER Lua
+	// script transformation, delivery-time overrides, and signing have been
+	// applied. This is a debug aid; the payload may contain sensitive data, so
+	// keep it disabled in production. The dump is emitted via the structured
+	// logger (stdout / configured sink) tagged with the webhook ID.
+	DumpRequests bool `mapstructure:"dump_requests"`
 }
 
 type RetryConfig struct {
@@ -248,6 +256,7 @@ func DefaultConfig() *Config {
 			IdleConnTimeout:     90 * time.Second,
 			TLSHandshakeTimeout: 10 * time.Second,
 			UserAgent:           "HOWK/1.0",
+			DumpRequests:        false,
 		},
 		Retry: RetryConfig{
 			BaseDelay:   10 * time.Second,
@@ -409,6 +418,7 @@ func bindEnvVariables(v *viper.Viper) error {
 		"delivery.idle_conn_timeout",
 		"delivery.tls_handshake_timeout",
 		"delivery.user_agent",
+		"delivery.dump_requests",
 		// Retry
 		"retry.base_delay",
 		"retry.max_delay",

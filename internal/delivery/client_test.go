@@ -1,6 +1,7 @@
 package delivery_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -8,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/delivery"
@@ -254,4 +258,60 @@ func TestDeliver_AttemptHeader(t *testing.T) {
 	client.Deliver(context.Background(), webhook)
 	
 	assert.Equal(t, "3", capturedAttempt)
+}
+
+func TestDeliver_DumpRequests(t *testing.T) {
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Capture zerolog output into a buffer.
+	var buf bytes.Buffer
+	orig := zlog.Logger
+	zlog.Logger = zerolog.New(&buf)
+	defer func() { zlog.Logger = orig }()
+
+	cfg := config.DefaultConfig().Delivery
+	cfg.DumpRequests = true
+	client := delivery.NewClient(cfg)
+	defer client.Close()
+
+	webhook := testutil.NewTestWebhook(server.URL)
+	webhook.Headers = map[string]string{"X-Custom-Header": "from-lua"}
+
+	result := client.Deliver(context.Background(), webhook)
+	require.NoError(t, result.Error)
+
+	out := buf.String()
+	// The dump must contain the fully-assembled request, including custom headers
+	// (as a Lua script / override would set) and the standard webhook headers.
+	assert.Contains(t, out, "Outgoing webhook request")
+	assert.Contains(t, out, "X-Custom-Header: from-lua")
+	assert.Contains(t, out, "X-Webhook-Id")
+	// Body must still reach the server — DumpRequestOut must restore req.Body.
+	assert.JSONEq(t, `{"test": true}`, gotBody)
+}
+
+func TestDeliver_DumpRequests_Disabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	var buf bytes.Buffer
+	orig := zlog.Logger
+	zlog.Logger = zerolog.New(&buf)
+	defer func() { zlog.Logger = orig }()
+
+	// DumpRequests defaults to false.
+	client := delivery.NewClient(config.DefaultConfig().Delivery)
+	defer client.Close()
+
+	client.Deliver(context.Background(), testutil.NewTestWebhook(server.URL))
+
+	assert.NotContains(t, buf.String(), "Outgoing webhook request")
 }
