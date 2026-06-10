@@ -5,6 +5,15 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-06-10
+
+### Added
+- **Outgoing request debug dump (`delivery.dump_requests`)**: New opt-in flag that logs the exact outgoing HTTP request — request line, all headers, and body — immediately before it hits the wire, i.e. **after** Lua script transformation, delivery-time overrides, and HMAC signing have been applied. Closes the visibility gap where the final request could not be observed once a script rewrote the payload/headers.
+  - Implemented in `delivery.Client` via `httputil.DumpRequestOut`, which serializes the real transport bytes and transparently restores `req.Body` so the actual send is unaffected.
+  - Emitted through the structured logger (stdout / configured sink) at info level, tagged with `webhook_id`, `endpoint`, and `attempt` for easy grepping — no Kafka topic involved.
+  - Default `false`. The dump is intentionally **unredacted** and may expose payloads and secret-bearing headers, so keep it disabled in production. (DLQ-bound records remain governed by the separate `dlq` redaction policy.)
+  - Env var: `HOWK_DELIVERY_DUMP_REQUESTS`.
+
 ## [0.4.7] - 2026-05-11
 
 ### Added
