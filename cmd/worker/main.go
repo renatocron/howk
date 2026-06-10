@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -133,8 +132,8 @@ func main() {
 			scriptLoader,
 			hs,
 			cfg.Kafka.Topics.Scripts,
-			cfg.Kafka.ConsumerGroup+"-scripts", // Separate consumer group for scripts
-			24*time.Hour,                       // Script cache TTL
+			cfg.Kafka.ConsumerGroup+"-scripts", // identification only; Replay uses no consumer group
+			0,                                  // Redis mirror: no expiry (Kafka is source of truth; tombstones handle deletes)
 		)
 		workerOpts = append(workerOpts, worker.WithScriptConsumer(scriptConsumer))
 	}

@@ -38,13 +38,35 @@ func (s *Server) handleEnqueueWebhookBatch(c *gin.Context) {
 // It handles both single and batch enqueue operations.
 func (s *Server) processEnqueue(c *gin.Context, configID string, reqs []EnqueueRequest) {
 	ctx := c.Request.Context()
+
+	// Build all webhooks first so require_script can fail-fast BEFORE anything
+	// is published — an all-or-nothing gate. buildWebhook resolves ScriptHash
+	// via the memory-first loader (then Redis), so an empty hash here means no
+	// script is registered for this config_id.
+	webhooks := make([]*domain.Webhook, len(reqs))
+	for i := range reqs {
+		webhooks[i] = s.buildWebhook(domain.ConfigID(configID), &reqs[i])
+		if reqs[i].RequireScript && webhooks[i].ScriptHash == "" {
+			log.Warn().
+				Str("config_id", configID).
+				Int("index", i).
+				Msg("require_script set but no script resolved for config_id, rejecting enqueue")
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error":     "no script registered for config_id; require_script enqueue rejected",
+				"config_id": configID,
+				"index":     i,
+			})
+			return
+		}
+	}
+
 	responses := make([]EnqueueResponse, 0, len(reqs))
 	var accepted, failed int
 	var firstPublishError error
 	var firstEndpointHash string
 
-	for i, req := range reqs {
-		webhook := s.buildWebhook(domain.ConfigID(configID), &req)
+	for i := range reqs {
+		webhook := webhooks[i]
 
 		// Capture the first endpoint hash for stats
 		if i == 0 {

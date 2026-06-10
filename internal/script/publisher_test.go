@@ -28,6 +28,10 @@ func (m *mockBroker) Subscribe(ctx context.Context, topic string, group string, 
 	return nil
 }
 
+func (m *mockBroker) Replay(ctx context.Context, topic string, handler broker.Handler) error {
+	return nil
+}
+
 func (m *mockBroker) Close() error {
 	return nil
 }

@@ -164,6 +164,123 @@ func (k *KafkaBroker) Subscribe(ctx context.Context, topic, group string, handle
 	}
 }
 
+// Replay consumes all partitions of a topic from the earliest offset without
+// a consumer group, then keeps tailing until ctx is cancelled. Used for
+// compacted state topics (scripts) so every instance materializes the full
+// topic state in memory regardless of replica count — the KTable pattern.
+// Per-key ordering is preserved because Kafka keys a given config_id to a
+// single partition, and each partition is consumed sequentially.
+func (k *KafkaBroker) Replay(ctx context.Context, topic string, handler Handler) error {
+	// NewConsumerFromClient shares the existing client; closing the consumer
+	// does not close the client.
+	consumer, err := sarama.NewConsumerFromClient(k.client)
+	if err != nil {
+		return fmt.Errorf("create replay consumer: %w", err)
+	}
+	defer consumer.Close()
+
+	partitions, err := consumer.Partitions(topic)
+	if err != nil {
+		return fmt.Errorf("list partitions for %s: %w", topic, err)
+	}
+
+	log.Info().
+		Str("topic", topic).
+		Int("partitions", len(partitions)).
+		Msg("Replaying topic from earliest offset")
+
+	// Internal cancellation so a single partition failure tears down all
+	// partition goroutines before consumer.Close().
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(partitions))
+
+	for _, partition := range partitions {
+		pc, err := consumer.ConsumePartition(topic, partition, sarama.OffsetOldest)
+		if err != nil {
+			return fmt.Errorf("consume partition %d of %s: %w", partition, topic, err)
+		}
+
+		wg.Add(1)
+		go func(partition int32, pc sarama.PartitionConsumer) {
+			defer wg.Done()
+			defer pc.Close()
+
+			for {
+				select {
+				case <-rctx.Done():
+					return
+				case consumeErr, ok := <-pc.Errors():
+					if !ok {
+						// Channel closed: sarama tears the partition consumer
+						// down on fatal errors (e.g. offset out of range). A
+						// silently-dead partition would mean silently-stale
+						// script state — exactly the failure class Replay
+						// exists to prevent. Signal the outer loop to restart
+						// the whole replay. errCh has len(partitions) capacity
+						// and each goroutine sends at most once, so this never
+						// blocks.
+						errCh <- fmt.Errorf("replay partition %d of %s: consumer closed", partition, topic)
+						return
+					}
+					log.Error().Err(consumeErr).
+						Str("topic", topic).
+						Int32("partition", partition).
+						Msg("Replay partition error")
+					errCh <- consumeErr
+					return
+				case msg, ok := <-pc.Messages():
+					if !ok {
+						// Same as above: a closed Messages channel without ctx
+						// cancellation means the partition consumer died.
+						// The select races between the two closed channels, so
+						// both branches must signal restart.
+						errCh <- fmt.Errorf("replay partition %d of %s: messages channel closed", partition, topic)
+						return
+					}
+					m := &Message{
+						Key:   msg.Key,
+						Value: msg.Value,
+					}
+					if len(msg.Headers) > 0 {
+						m.Headers = make(map[string]string, len(msg.Headers))
+						for _, h := range msg.Headers {
+							m.Headers[string(h.Key)] = string(h.Value)
+						}
+					}
+					// Handler errors are logged and skipped: a replayed state
+					// topic has no redelivery semantic, and one bad record must
+					// not stall the rebuild of the remaining state.
+					if err := handler(ctx, m); err != nil {
+						log.Error().Err(err).
+							Str("topic", topic).
+							Int32("partition", partition).
+							Str("key", string(msg.Key)).
+							Msg("Replay handler error, skipping message")
+					}
+				}
+			}
+		}(partition, pc)
+	}
+
+	// Block until ctx cancellation or a partition consumer fails. On failure
+	// return the error so the caller's retry loop can restart the replay.
+	var firstErr error
+	select {
+	case <-ctx.Done():
+		firstErr = ctx.Err()
+	case firstErr = <-errCh:
+	}
+
+	// Tear down all partition goroutines (each defers pc.Close()) before the
+	// deferred consumer.Close() runs.
+	cancel()
+	wg.Wait()
+	return firstErr
+}
+
 func (k *KafkaBroker) Close() error {
 	k.mu.Lock()
 	defer k.mu.Unlock()

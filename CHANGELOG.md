@@ -5,6 +5,18 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-06-10
+
+### Added
+- **`require_script` enqueue flag (fail-fast on missing transformation)**: per-enqueue boolean (`require_script: true` in the webhook body). When set and no Lua script resolves for the `config_id` (memory-first loader, then Redis fallback), the API rejects the enqueue with **422** and publishes nothing — for batches it's all-or-nothing. Lets producers whose payload is meaningless without transformation (e.g. credential-injecting scripts) surface a missing/expired script *immediately at the source* instead of silently delivering a raw payload. HOWK enforces only script *presence*; it has no knowledge of what the script does (the credential-marker header is customer Lua convention, not a HOWK feature).
+
+### Fixed
+- **Script configs no longer silently disappear (Redis TTL + OffsetNewest); enqueue is now memory-first**: two compounding bugs could silently disable all Lua transformation, and the fix was a near-miss in its first form. (1) The Redis `script:*` key carried a TTL that nothing refreshed, and the API's enqueue-time `ScriptHash` tagging consulted **only** Redis — after expiry, webhooks shipped with an empty `ScriptHash` and the worker skipped transformation entirely, delivering raw payloads (with unexchanged credential markers) to endpoints. (2) The script consumer used a consumer **group** with `Offsets.Initial=OffsetNewest`, so a fresh group never replayed the compacted scripts topic, and multiple replicas split partitions — the durable Kafka copy was unreachable exactly when Redis was empty.
+  - New `Broker.Replay(ctx, topic, handler)`: consumes **all** partitions from the earliest offset with no consumer group and keeps tailing (KTable pattern). Implemented for Kafka, dev-mode `MemBroker` (with per-topic history retention), and test mocks.
+  - `script.Consumer` now uses `Replay` — every worker **and** API instance materializes the full script state in memory on startup, and the write-through self-heals Redis on every boot.
+  - The API now runs its own script consumer + in-memory loader, and `buildWebhook` is **memory-first**: it resolves `ScriptHash` from the in-process loader (O(1), namespace fallback included) with **no Redis round-trip on the enqueue hot path**. Redis is consulted only as a cold-start fallback (the brief window before the first replay, or deployments wiring no loader); a fallback hit populates the loader so subsequent enqueues stay in memory. `handleUploadScript` now also write-throughs to the local loader for immediate read-after-write. This removes Redis as both a correctness dependency *and* a per-enqueue latency cost.
+  - The Redis script mirror is now written with **no expiry** (`scriptCacheTTL = 0`, and `script.Consumer` TTL `0`). A TTL on a mirror whose source of truth is a compacted topic only re-arms the original failure on a delay; deletes are already propagated by tombstones, so the mirror never accumulates orphans and has nothing to expire. The consumer's write-through still rebuilds the mirror from Kafka on boot, so a Redis flush self-heals.
+
 ## [0.4.8] - 2026-06-10
 
 ### Added

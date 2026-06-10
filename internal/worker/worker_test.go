@@ -39,6 +39,11 @@ func (m *MockBroker) Subscribe(ctx context.Context, topic, group string, handler
 	return args.Error(0)
 }
 
+func (m *MockBroker) Replay(ctx context.Context, topic string, handler broker.Handler) error {
+	args := m.Called(ctx, topic, handler)
+	return args.Error(0)
+}
+
 func (m *MockBroker) Close() error {
 	args := m.Called()
 	return args.Error(0)

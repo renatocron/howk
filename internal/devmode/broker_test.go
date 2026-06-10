@@ -295,3 +295,75 @@ func TestMemWebhookPublisher_PublishStateNilErrors(t *testing.T) {
 	err := pub.PublishState(context.Background(), nil)
 	assert.Error(t, err)
 }
+
+func TestMemBroker_Replay_HistoryThenLive(t *testing.T) {
+	mb := NewMemBroker()
+	defer mb.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Publish BEFORE any subscriber exists — Subscribe would miss these.
+	require.NoError(t, mb.Publish(ctx, "scripts", broker.Message{Key: []byte("a"), Value: []byte("1")}))
+	require.NoError(t, mb.Publish(ctx, "scripts", broker.Message{Key: []byte("b"), Value: []byte("2")}))
+
+	var mu sync.Mutex
+	got := []string{}
+	done := make(chan struct{})
+
+	go func() {
+		_ = mb.Replay(ctx, "scripts", func(ctx context.Context, msg *broker.Message) error {
+			mu.Lock()
+			got = append(got, string(msg.Key)+"="+string(msg.Value))
+			if len(got) == 3 {
+				close(done)
+			}
+			mu.Unlock()
+			return nil
+		})
+	}()
+
+	// Give the replay a moment to register, then publish a live message.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) >= 2
+	}, 2*time.Second, 10*time.Millisecond, "history should be replayed")
+
+	require.NoError(t, mb.Publish(ctx, "scripts", broker.Message{Key: []byte("c"), Value: []byte("3")}))
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("live message after replay not delivered")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"a=1", "b=2", "c=3"}, got)
+}
+
+func TestMemBroker_Replay_TombstoneNilValue(t *testing.T) {
+	mb := NewMemBroker()
+	defer mb.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, mb.Publish(ctx, "scripts", broker.Message{Key: []byte("a"), Value: nil}))
+
+	gotNil := make(chan bool, 1)
+	go func() {
+		_ = mb.Replay(ctx, "scripts", func(ctx context.Context, msg *broker.Message) error {
+			gotNil <- msg.Value == nil
+			return nil
+		})
+	}()
+
+	select {
+	case isNil := <-gotNil:
+		assert.True(t, isNil, "tombstone nil value must survive replay")
+	case <-time.After(2 * time.Second):
+		t.Fatal("tombstone not replayed")
+	}
+}

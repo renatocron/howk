@@ -134,7 +134,7 @@ func main() {
 			hs,
 			cfg.Kafka.Topics.Scripts,
 			"dev-scripts",
-			24*time.Hour,
+			0, // Redis mirror: no expiry (parity with prod; tombstones handle deletes)
 		)
 		workerOpts = append(workerOpts, worker.WithScriptConsumer(scriptConsumer))
 	}

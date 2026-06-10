@@ -50,6 +50,12 @@ func (m *MockBrokerForConsumer) Subscribe(ctx context.Context, topic, group stri
 	return args.Error(0)
 }
 
+func (m *MockBrokerForConsumer) Replay(ctx context.Context, topic string, handler broker.Handler) error {
+	args := m.Called(ctx, topic, handler)
+	m.handler = handler
+	return args.Error(0)
+}
+
 func (m *MockBrokerForConsumer) Close() error {
 	args := m.Called()
 	return args.Error(0)
@@ -96,7 +102,7 @@ func TestConsumer_StartStop(t *testing.T) {
 	)
 
 	// Mock the subscription to return immediately (simulating context cancellation)
-	mockBroker.On("Subscribe", mock.Anything, "test.scripts", "test-group", mock.Anything).
+	mockBroker.On("Replay", mock.Anything, "test.scripts", mock.Anything).
 		Return(context.Canceled)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -380,7 +386,7 @@ func TestConsumer_Start_AlreadyRunning(t *testing.T) {
 	)
 
 	// Mock the subscription
-	mockBroker.On("Subscribe", mock.Anything, "test.scripts", "test-group", mock.Anything).
+	mockBroker.On("Replay", mock.Anything, "test.scripts", mock.Anything).
 		Return(context.Canceled)
 
 	ctx, cancel := context.WithCancel(context.Background())

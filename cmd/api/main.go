@@ -65,6 +65,26 @@ func main() {
 	scriptValidator := script.NewValidator()
 	scriptPublisher := script.NewPublisher(kafkaBroker, cfg.Kafka.Topics.Scripts)
 
+	// Replay the compacted scripts topic into an in-memory loader so enqueue
+	// can tag ScriptHash even when the Redis script cache misses (TTL expiry,
+	// flush, outage). Without this, a Redis miss silently disabled
+	// transformation: webhooks shipped with an empty ScriptHash and the worker
+	// delivered raw payloads. The consumer also write-throughs to Redis,
+	// self-healing the cache on every startup.
+	scriptLoader := script.NewLoader()
+	scriptConsumer := script.NewConsumer(
+		kafkaBroker,
+		scriptLoader,
+		hs,
+		cfg.Kafka.Topics.Scripts,
+		"api-scripts-replay", // identification only; Replay uses no consumer group
+		0,                    // Redis mirror: no expiry (Kafka is source of truth; tombstones handle deletes)
+	)
+	if err := scriptConsumer.Start(ctx); err != nil {
+		log.Error().Err(err).Msg("Failed to start script consumer; enqueue will rely on Redis script cache only")
+	}
+	defer scriptConsumer.Stop()
+
 	// Initialize transformer feature (if enabled)
 	var transformerRegistry *transformer.Registry
 	var transformerEngine *transformer.Engine
@@ -118,7 +138,7 @@ func main() {
 	}
 
 	// Create server options
-	serverOpts := []api.ServerOption{}
+	serverOpts := []api.ServerOption{api.WithScriptLoader(scriptLoader)}
 	if transformerRegistry != nil && transformerEngine != nil {
 		serverOpts = append(serverOpts, api.WithTransformers(transformerRegistry, transformerEngine))
 	}

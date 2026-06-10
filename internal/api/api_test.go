@@ -15,6 +15,7 @@ import (
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
 	"github.com/howk/howk/internal/mocks"
+	"github.com/howk/howk/internal/script"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -561,4 +562,151 @@ func TestBuildWebhook_InvalidScriptJSON(t *testing.T) {
 	// Should still create webhook but without script hash
 	assert.Empty(t, webhook.ScriptHash)
 	assert.Equal(t, domain.ConfigID("cfg-test"), webhook.ConfigID)
+}
+
+// TestBuildWebhook_LoaderPrimary verifies that ScriptHash is resolved from the
+// in-memory loader (memory-first) WITHOUT any Redis call — the loader holds the
+// full script state replayed from Kafka, including namespace fallback.
+func TestBuildWebhook_LoaderPrimary(t *testing.T) {
+	server, _, mockHS, _, _ := setupTestServer(t)
+
+	loader := script.NewLoader()
+	loader.SetScript(&script.Config{
+		ConfigID: "wh",
+		LuaCode:  "return payload",
+		Hash:     "deadbeef",
+	})
+	WithScriptLoader(loader)(server)
+
+	// No GetScript/SetScript expectations registered: Redis must NOT be touched.
+	wh := server.buildWebhook("wh:75:1", &EnqueueRequest{
+		Endpoint: "https://example.com/webhook",
+		Payload:  json.RawMessage(`{"a":1}`),
+	})
+
+	assert.Equal(t, "deadbeef", wh.ScriptHash,
+		"ScriptHash must be tagged from the loader (namespace fallback wh:75:1 -> wh)")
+	mockHS.AssertNotCalled(t, "GetScript", mock.Anything, mock.Anything)
+	mockHS.AssertNotCalled(t, "SetScript", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestBuildWebhook_ColdStartRedisFallback verifies that when the loader is
+// empty (e.g. before replay completes), enqueue falls back to Redis once and
+// populates the loader so the next enqueue stays in memory.
+func TestBuildWebhook_ColdStartRedisFallback(t *testing.T) {
+	server, _, mockHS, _, _ := setupTestServer(t)
+
+	loader := script.NewLoader()
+	WithScriptLoader(loader)(server)
+
+	scriptJSON := `{"lua_code":"return payload","hash":"redis-hash","config_id":"wh"}`
+	// Loader miss for "wh:75:1" -> Redis consulted once.
+	mockHS.On("GetScript", mock.Anything, domain.ConfigID("wh:75:1")).Return(scriptJSON, nil).Once()
+
+	wh := server.buildWebhook("wh:75:1", &EnqueueRequest{
+		Endpoint: "https://example.com/webhook",
+		Payload:  json.RawMessage(`{"a":1}`),
+	})
+
+	assert.Equal(t, "redis-hash", wh.ScriptHash)
+	// Loader must now hold it (populated from the Redis hit).
+	cfg, err := loader.GetScript("wh")
+	assert.NoError(t, err)
+	if assert.NotNil(t, cfg) {
+		assert.Equal(t, "redis-hash", cfg.Hash)
+	}
+	mockHS.AssertExpectations(t)
+}
+
+// TestBuildWebhook_NoScriptAnywhere verifies that with an empty loader and a
+// Redis miss, ScriptHash is left empty (no transformation registered).
+func TestBuildWebhook_NoScriptAnywhere(t *testing.T) {
+	server, _, mockHS, _, _ := setupTestServer(t)
+	WithScriptLoader(script.NewLoader())(server)
+
+	mockHS.On("GetScript", mock.Anything, domain.ConfigID("other:1")).
+		Return("", errors.New("script not found"))
+
+	wh := server.buildWebhook("other:1", &EnqueueRequest{
+		Endpoint: "https://example.com/webhook",
+		Payload:  json.RawMessage(`{"a":1}`),
+	})
+
+	assert.Empty(t, wh.ScriptHash)
+	mockHS.AssertExpectations(t)
+}
+
+// TestEnqueue_RequireScript_RejectsWhenMissing verifies that require_script=true
+// fails fast with 422 and publishes nothing when no script resolves.
+func TestEnqueue_RequireScript_RejectsWhenMissing(t *testing.T) {
+	server, mockPub, mockHS, _, _ := setupTestServer(t)
+	WithScriptLoader(script.NewLoader())(server)
+
+	// Loader empty + Redis miss → no script.
+	mockHS.On("GetScript", mock.Anything, domain.ConfigID("wh:75:1")).
+		Return("", errors.New("script not found"))
+
+	reqBody := `{"endpoint":"https://example.com/webhook","payload":{"a":1},"require_script":true}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/webhooks/wh:75:1/enqueue", bytes.NewBufferString(reqBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "config", Value: "wh:75:1"}}
+
+	server.handleEnqueueWebhook(c)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	mockPub.AssertNotCalled(t, "PublishWebhook", mock.Anything, mock.Anything)
+}
+
+// TestEnqueue_RequireScript_AcceptsWhenPresent verifies require_script=true
+// passes (and stamps the hash) when the loader has the script — no Redis call.
+func TestEnqueue_RequireScript_AcceptsWhenPresent(t *testing.T) {
+	server, mockPub, mockHS, _, _ := setupTestServer(t)
+	loader := script.NewLoader()
+	loader.SetScript(&script.Config{ConfigID: "wh", Hash: "abc123"})
+	WithScriptLoader(loader)(server)
+
+	mockPub.On("PublishWebhook", mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	reqBody := `{"endpoint":"https://example.com/webhook","payload":{"a":1},"require_script":true}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/webhooks/wh:75:1/enqueue", bytes.NewBufferString(reqBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "config", Value: "wh:75:1"}}
+
+	server.handleEnqueueWebhook(c)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	mockHS.AssertNotCalled(t, "GetScript", mock.Anything, mock.Anything)
+	mockPub.AssertExpectations(t)
+}
+
+// TestEnqueue_RequireScript_BatchAllOrNothing verifies one require_script item
+// without a script rejects the WHOLE batch (nothing published).
+func TestEnqueue_RequireScript_BatchAllOrNothing(t *testing.T) {
+	server, mockPub, mockHS, _, _ := setupTestServer(t)
+	WithScriptLoader(script.NewLoader())(server)
+
+	mockHS.On("GetScript", mock.Anything, domain.ConfigID("wh:9:1")).
+		Return("", errors.New("script not found"))
+
+	reqBody := `{"webhooks":[
+		{"endpoint":"https://a.example.com/","payload":{"a":1}},
+		{"endpoint":"https://b.example.com/","payload":{"b":2},"require_script":true}
+	]}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/webhooks/wh:9:1/enqueue/batch", bytes.NewBufferString(reqBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "config", Value: "wh:9:1"}}
+
+	server.handleEnqueueWebhookBatch(c)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	mockPub.AssertNotCalled(t, "PublishWebhook", mock.Anything, mock.Anything)
 }

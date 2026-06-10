@@ -26,6 +26,7 @@ type Server struct {
 	hotstate            hotstate.HotState
 	scriptValidator     script.SyntaxChecker
 	scriptPublisher     script.ScriptPublisher
+	scriptLoader        *script.Loader
 	transformerRegistry *transformer.Registry
 	transformerEngine   *transformer.Engine
 	router              *gin.Engine
@@ -66,6 +67,17 @@ func NewServer(
 
 	s.setupRoutes()
 	return s
+}
+
+// WithScriptLoader sets the Kafka-replayed in-memory script loader. When set,
+// webhook enqueue falls back to it for ScriptHash tagging whenever the Redis
+// script cache misses (TTL expiry, flush, outage), and heals the Redis key on
+// a hit. The loader is kept current by a script.Consumer replaying the
+// compacted scripts topic.
+func WithScriptLoader(loader *script.Loader) ServerOption {
+	return func(s *Server) {
+		s.scriptLoader = loader
+	}
 }
 
 // WithTransformers sets the transformer registry and engine
@@ -147,6 +159,14 @@ type EnqueueRequest struct {
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	SigningSecret  string            `json:"signing_secret,omitempty"`
 	MaxAttempts    int               `json:"max_attempts,omitempty"`
+
+	// RequireScript, when true, makes the enqueue fail-fast with 422 if no Lua
+	// script resolves for this config_id (memory loader, then Redis fallback).
+	// Use it when the payload is meaningless without transformation — e.g. a
+	// credential-injecting script — so a missing/expired script surfaces
+	// immediately at the producer instead of silently delivering a raw payload.
+	// HOWK has no knowledge of what the script does; it only enforces presence.
+	RequireScript bool `json:"require_script,omitempty"`
 }
 
 type EnqueueResponse struct {
@@ -227,19 +247,33 @@ func (s *Server) buildWebhook(configID domain.ConfigID, req *EnqueueRequest) *do
 		MaxAttempts:    req.MaxAttempts,
 	})
 
-	// Attach script hash when a Lua transformer is registered for this config_id.
-	// Done at enqueue time so the worker can detect transformation intent without
-	// hitting Redis again.
-	ctx := context.Background()
-	scriptJSON, err := s.hotstate.GetScript(ctx, configID)
+	// Resolve the script hash for this config_id to mark transformation intent
+	// for the worker. The in-memory loader holds the COMPLETE script state
+	// (replayed from the compacted Kafka topic and kept current by the tail),
+	// so this is the primary source: an O(1) in-process lookup with namespace
+	// fallback ("wh:75:1" -> "wh"). No Redis round-trip on the enqueue hot
+	// path. Redis is consulted ONLY as a cold-start fallback (below), for the
+	// brief window before the first replay populates the loader, or for
+	// deployments that wire no loader.
+	if s.scriptLoader != nil {
+		if cfg, err := s.scriptLoader.GetScript(configID); err == nil && cfg != nil {
+			webhook.ScriptHash = cfg.Hash
+			return webhook
+		}
+	}
+
+	// Cold-start / no-loader fallback: consult Redis once. On a hit, populate
+	// the loader so subsequent enqueues for this config_id hit memory and
+	// never touch Redis again. (This is the path the old code took on EVERY
+	// enqueue; it is now the exception, not the rule.)
+	scriptJSON, err := s.hotstate.GetScript(context.Background(), configID)
 	if err == nil && scriptJSON != "" {
 		var scriptConfig script.Config
 		if err := json.Unmarshal([]byte(scriptJSON), &scriptConfig); err == nil {
 			webhook.ScriptHash = scriptConfig.Hash
-			log.Debug().
-				Str("config_id", string(configID)).
-				Str("script_hash", scriptConfig.Hash).
-				Msg("Auto-applied script hash to webhook")
+			if s.scriptLoader != nil {
+				s.scriptLoader.SetScript(&scriptConfig)
+			}
 		}
 	}
 

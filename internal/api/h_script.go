@@ -15,6 +15,17 @@ import (
 	"github.com/howk/howk/internal/script"
 )
 
+// scriptCacheTTL is the TTL for the Redis mirror of script configs. It is 0 —
+// NO EXPIRY — on purpose. Redis is a cache, not the source of truth (the
+// compacted Kafka scripts topic is), and enqueue is memory-first, so Redis is
+// not load-bearing. But an *expiring* mirror is precisely what silently
+// disabled all transformation once: the key aged out, enqueue stopped tagging
+// ScriptHash, and webhooks shipped raw (see v0.4.9 post-mortem). Deletes are
+// propagated by tombstones (handleMessage / DeleteScript), so the mirror never
+// accumulates orphans — there is nothing for a TTL to clean up. A non-zero TTL
+// would only re-arm the same failure on a delay; "very long" just delays it.
+const scriptCacheTTL = 0 // time.Duration(0) → Redis SET with no expiration
+
 // Script request/response types
 
 type UploadScriptRequest struct {
@@ -111,9 +122,16 @@ func (s *Server) handleUploadScript(c *gin.Context) {
 		return
 	}
 
-	if err := s.hotstate.SetScript(c.Request.Context(), configID, string(scriptJSON), 7*24*time.Hour); err != nil {
+	if err := s.hotstate.SetScript(c.Request.Context(), configID, string(scriptJSON), scriptCacheTTL); err != nil {
 		s.logger.Warn().Err(err).Msg("Failed to cache script in Redis (non-fatal)")
 		// Continue - Kafka is source of truth
+	}
+
+	// Populate the local in-memory loader immediately so this pod serves the
+	// new script on the very next enqueue, without waiting for the Kafka tail
+	// to replay it back. Other pods converge via their own replay tail.
+	if s.scriptLoader != nil {
+		s.scriptLoader.SetScript(scriptConfig)
 	}
 
 	// Return response
@@ -133,6 +151,21 @@ func (s *Server) handleGetScript(c *gin.Context) {
 	// Try to get from Redis cache first
 	scriptJSON, err := s.hotstate.GetScript(c.Request.Context(), configID)
 	if err != nil {
+		// Fallback: Kafka-replayed in-memory loader (covers Redis TTL expiry,
+		// flush, or outage). Same chain as buildWebhook.
+		if s.scriptLoader != nil {
+			if cfg, lerr := s.scriptLoader.GetScript(configID); lerr == nil && cfg != nil {
+				c.JSON(http.StatusOK, ScriptResponse{
+					ConfigID:  string(cfg.ConfigID),
+					LuaCode:   cfg.LuaCode,
+					Hash:      cfg.Hash,
+					Version:   cfg.Version,
+					CreatedAt: cfg.CreatedAt,
+					UpdatedAt: cfg.UpdatedAt,
+				})
+				return
+			}
+		}
 		if errors.Is(err, hotstate.ErrScriptNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Script not found"})
 		} else {

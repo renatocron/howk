@@ -20,8 +20,12 @@ type ScriptStore interface {
 	DeleteScript(ctx context.Context, configID domain.ConfigID) error
 }
 
-// Consumer consumes script configurations from Kafka and maintains a local cache
-// This ensures the Worker has scripts even if Redis is flushed
+// Consumer replays script configurations from the compacted Kafka topic and
+// maintains a local in-memory cache (Loader), write-through to Redis.
+// Every instance holds the FULL script state regardless of replica count, so
+// scripts survive Redis loss/TTL expiry and pod restarts. The group parameter
+// is retained for logging/identification only — Replay does not use consumer
+// groups.
 type Consumer struct {
 	broker    broker.Broker
 	loader    *Loader
@@ -36,10 +40,21 @@ type Consumer struct {
 	wg        sync.WaitGroup
 }
 
-// NewConsumer creates a new script consumer
+// NewConsumer creates a new script consumer.
+//
+// cacheTTL is the TTL for the Redis write-through mirror of each script.
+// A value <= 0 means NO EXPIRY (persist): the compacted Kafka topic is the
+// source of truth and deletes are propagated via tombstones, so there is no
+// reason for the Redis mirror to expire on its own — an expiring mirror is
+// exactly what silently disabled all transformation once (see the v0.4.9
+// post-mortem). Pass 0 unless you have a specific reason to expire.
 func NewConsumer(brk broker.Broker, loader *Loader, hs ScriptStore, topic, group string, cacheTTL time.Duration) *Consumer {
-	if cacheTTL == 0 {
-		cacheTTL = 24 * time.Hour // Default TTL
+	// Clamp negatives to 0: go-redis interprets -1 (redis.KeepTTL) as
+	// "preserve the key's existing TTL", which on a key still carrying the
+	// legacy 7-day TTL would re-arm the exact expiry incident this exists to
+	// prevent. Only exactly-0 yields a plain SET with no expiration.
+	if cacheTTL < 0 {
+		cacheTTL = 0
 	}
 	return &Consumer{
 		broker:   brk,
@@ -115,13 +130,19 @@ func (c *Consumer) run(ctx context.Context) {
 		default:
 		}
 
-		// Subscribe and consume
-		err := c.broker.Subscribe(ctx, c.topic, c.group, c.handleMessage)
+		// Replay the compacted topic from the earliest offset (no consumer
+		// group): every instance materializes the FULL script state in memory.
+		// The old group-based Subscribe had two fatal properties for a state
+		// topic: partitions were split across replicas (each pod saw only a
+		// subset of scripts), and a fresh group started at OffsetNewest, so a
+		// restarted pod never saw previously-deployed scripts at all — which,
+		// combined with the Redis script TTL, silently disabled transformation.
+		err := c.broker.Replay(ctx, c.topic, c.handleMessage)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Error().Err(err).Msg("Script consumer subscription error, retrying...")
+			log.Error().Err(err).Msg("Script consumer replay error, retrying...")
 			time.Sleep(time.Second)
 		}
 	}

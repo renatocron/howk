@@ -15,25 +15,39 @@ import (
 
 const channelBuffer = 1000
 
+// historyLimit caps per-topic retained messages for Replay. History is
+// retained for EVERY topic (the broker can't know which topics will be
+// Replayed), so high-volume dev topics like pending/results also accumulate
+// up to this many messages in RAM — the cap bounds that growth in long dev
+// sessions. Note the cap drops the NEWEST messages once full (append stops),
+// which is fine for the scripts topic (never near the cap) but means Replay
+// is not a faithful source for high-volume topics; only the scripts topic is
+// Replayed today.
+const historyLimit = 10000
+
 // MemBroker is an in-memory message broker for dev mode.
 // It replaces Kafka with channel-based pub/sub.
 type MemBroker struct {
-	mu     sync.RWMutex
-	subs   map[string][]chan *broker.Message
-	closed bool
+	mu      sync.RWMutex
+	subs    map[string][]chan *broker.Message
+	history map[string][]*broker.Message
+	closed  bool
 }
 
 var _ broker.Broker = (*MemBroker)(nil)
 
 func NewMemBroker() *MemBroker {
 	return &MemBroker{
-		subs: make(map[string][]chan *broker.Message),
+		subs:    make(map[string][]chan *broker.Message),
+		history: make(map[string][]*broker.Message),
 	}
 }
 
 func (b *MemBroker) Publish(ctx context.Context, topic string, msgs ...broker.Message) error {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	// Full lock: history append must be atomic with fan-out so Replay's
+	// snapshot+subscribe (also under the lock) neither misses nor duplicates.
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	if b.closed {
 		return fmt.Errorf("broker closed")
@@ -42,6 +56,13 @@ func (b *MemBroker) Publish(ctx context.Context, topic string, msgs ...broker.Me
 	channels := b.subs[topic]
 	for i := range msgs {
 		msg := msgs[i] // copy
+
+		// Retain for Replay (capped), mirroring Kafka retention so late
+		// Replay callers can rebuild full topic state.
+		if len(b.history[topic]) < historyLimit {
+			b.history[topic] = append(b.history[topic], &msg)
+		}
+
 		for _, ch := range channels {
 			select {
 			case ch <- &msg:
@@ -70,6 +91,44 @@ func (b *MemBroker) Subscribe(ctx context.Context, topic, group string, handler 
 			}
 			if err := handler(ctx, msg); err != nil {
 				log.Warn().Err(err).Str("topic", topic).Msg("devmode: handler error")
+			}
+		}
+	}
+}
+
+// Replay delivers the retained history of a topic, then keeps tailing live
+// messages until ctx is cancelled. Mirrors KafkaBroker.Replay semantics for
+// compacted state topics. Snapshot and live-channel registration happen under
+// one lock acquisition, so no message is missed or duplicated in between.
+func (b *MemBroker) Replay(ctx context.Context, topic string, handler broker.Handler) error {
+	ch := make(chan *broker.Message, channelBuffer)
+
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return fmt.Errorf("broker closed")
+	}
+	snapshot := make([]*broker.Message, len(b.history[topic]))
+	copy(snapshot, b.history[topic])
+	b.subs[topic] = append(b.subs[topic], ch)
+	b.mu.Unlock()
+
+	for _, msg := range snapshot {
+		if err := handler(ctx, msg); err != nil {
+			log.Warn().Err(err).Str("topic", topic).Msg("devmode: replay handler error, skipping")
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case msg, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if err := handler(ctx, msg); err != nil {
+				log.Warn().Err(err).Str("topic", topic).Msg("devmode: replay handler error, skipping")
 			}
 		}
 	}

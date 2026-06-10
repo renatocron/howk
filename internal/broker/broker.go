@@ -25,6 +25,17 @@ type Broker interface {
 	// This is blocking and should be run in a goroutine
 	Subscribe(ctx context.Context, topic, group string, handler Handler) error
 
+	// Replay consumes ALL partitions of a topic from the earliest offset,
+	// without a consumer group, and keeps tailing for new messages until the
+	// context is cancelled. Designed for compacted state topics (e.g. script
+	// configs) where every instance must materialize the full topic state in
+	// memory — the KTable pattern. Unlike Subscribe, partitions are never
+	// split between instances and no offsets are committed, so a restart
+	// always rebuilds complete state. Handler errors are logged and skipped
+	// (there is no redelivery semantic on a replay).
+	// This is blocking and should be run in a goroutine.
+	Replay(ctx context.Context, topic string, handler Handler) error
+
 	// Close gracefully shuts down the broker
 	Close() error
 }
