@@ -248,6 +248,7 @@ func (r *Reconciler) restoreState(ctx context.Context, snap *domain.WebhookState
 			DeliveryQueryParams: snap.DeliveryQueryParams,
 			DeliveryHeaders:     snap.DeliveryHeaders,
 			RetryOnStatus:       snap.RetryOnStatus,
+			Ordered:             snap.Ordered,
 			Attempt:             snap.Attempt,
 			MaxAttempts:         snap.MaxAttempts,
 			CreatedAt:           snap.CreatedAt,

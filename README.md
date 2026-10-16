@@ -204,6 +204,7 @@ Fast Lane (howk.pending)          Slow Lane (howk.slow)
 | **Circuit Breaker** | Fail-closed | If Redis is unavailable, requests are blocked (safety over availability) |
 | **Idempotency Check** | Fail-open | If Redis is unavailable, duplicate delivery is possible |
 | **Slow Lane Divert** | Fail-open | If divert to slow lane fails, delivery proceeds in fast lane |
+| **Ordered Webhooks** | Bypass | Webhooks enqueued with `"ordered": true` are never diverted; they are delivered in the fast lane even over the threshold |
 | **Stats Recording** | Fail-silent | Stats errors are logged but don't block delivery |
 
 - **Fail-open vs Fail-closed**: 
@@ -504,9 +505,14 @@ Request:
   "payload": {"event": "order.completed"},
   "headers": {"X-Custom": "value"},
   "idempotency_key": "order-123-completed",
-  "signing_secret": "whsec_..."
+  "signing_secret": "whsec_...",
+  "ordered": true
 }
 ```
+
+Optional flags:
+- `require_script`: reject with `422` if no Lua script resolves for the config.
+- `ordered`: never divert to the slow lane. When the endpoint is at its concurrency limit the webhook is delivered in place, so deliveries for the same config keep partition order.
 
 Response: `202 Accepted`
 ```json

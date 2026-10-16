@@ -167,6 +167,10 @@ type EnqueueRequest struct {
 	// immediately at the producer instead of silently delivering a raw payload.
 	// HOWK has no knowledge of what the script does; it only enforces presence.
 	RequireScript bool `json:"require_script,omitempty"`
+
+	// Ordered, when true, keeps the webhook out of the slow lane so deliveries
+	// for the same config_id stay in partition order even when the endpoint is saturated.
+	Ordered bool `json:"ordered,omitempty"`
 }
 
 type EnqueueResponse struct {
@@ -245,6 +249,7 @@ func (s *Server) buildWebhook(configID domain.ConfigID, req *EnqueueRequest) *do
 		IdempotencyKey: req.IdempotencyKey,
 		SigningSecret:  req.SigningSecret,
 		MaxAttempts:    req.MaxAttempts,
+		Ordered:        req.Ordered,
 	})
 
 	// Resolve the script hash for this config_id to mark transformation intent

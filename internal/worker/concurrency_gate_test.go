@@ -200,3 +200,26 @@ func TestRunConcurrencyGate_DivertFailNoReacquire(t *testing.T) {
 
 	pub.AssertExpectations(t)
 }
+
+// TestRunConcurrencyGate_OrderedFastLaneDeliversInPlace verifies an ordered
+// webhook at capacity is never diverted and proceeds without holding a slot.
+func TestRunConcurrencyGate_OrderedFastLaneDeliversInPlace(t *testing.T) {
+	pub := new(MockPublisher)
+	w := newMinimalWorker(t, pub)
+
+	wh := minimalWebhook()
+	wh.Ordered = true
+
+	acquired, err := w.RunConcurrencyGate(context.Background(), wh, false /* fast lane */, worker.ConcurrencyGate{
+		Active: true,
+		TryAcquire: func() (bool, error) {
+			return false, nil // at capacity
+		},
+		ReacquireOnDivertFail: func() { t.Fatal("reacquire must not run for ordered webhooks") },
+		NackErr:               errors.New("saturated"),
+	})
+
+	require.NoError(t, err)
+	assert.False(t, acquired)
+	pub.AssertNotCalled(t, "PublishToSlow", mock.Anything, mock.Anything)
+}
