@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	lua "github.com/yuin/gopher-lua"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
+	lua "github.com/yuin/gopher-lua"
 
 	"github.com/howk/howk/internal/config"
 	"github.com/howk/howk/internal/domain"
@@ -21,22 +21,22 @@ import (
 
 // Engine executes Lua scripts in a sandboxed environment with pooling
 type Engine struct {
-	config  config.LuaConfig
-	pool    *sync.Pool
-	loader  *Loader
-	crypto  *modules.CryptoModule
-	http    *modules.HTTPModule
-	log     *modules.LogModule
-	rdb     *redis.Client
-	logger  zerolog.Logger
+	config config.LuaConfig
+	pool   *sync.Pool
+	loader *Loader
+	crypto *modules.CryptoModule
+	http   *modules.HTTPModule
+	log    *modules.LogModule
+	rdb    *redis.Client
+	logger zerolog.Logger
 }
 
 // NewEngine creates a new Lua script engine with optional crypto, http, and redis modules
 func NewEngine(cfg config.LuaConfig, loader *Loader, crypto *modules.CryptoModule, http *modules.HTTPModule, rdb *redis.Client, logger zerolog.Logger) *Engine {
-	
+
 	// Create log module
 	logModule := modules.NewLogModule(logger)
-	
+
 	engine := &Engine{
 		config: cfg,
 		loader: loader,
@@ -220,6 +220,7 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, scriptCfg *Co
 
 	// Initialize output tables
 	requestTable := L.NewTable()
+	requestTable.RawSetString("attempt", lua.LNumber(webhook.Attempt))
 	L.SetGlobal("request", requestTable)
 
 	// TODO(security): Add per-namespace env var allowlist for ${VAR_NAME} resolution.
@@ -259,7 +260,7 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, scriptCfg *Co
 		if ctx.Err() != nil {
 			return nil, ctx.Err() // Return context error directly
 		}
-		
+
 		// Check for memory limit errors
 		// Only check when memory limit is actually configured
 		errStr := err.Error()
@@ -270,7 +271,7 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, scriptCfg *Co
 				Cause:   err,
 			}
 		}
-		
+
 		return nil, &ScriptError{
 			Type:    ScriptErrorRuntime,
 			Message: "Lua runtime error",
@@ -281,7 +282,6 @@ func (e *Engine) executeScript(ctx context.Context, L *lua.LState, scriptCfg *Co
 	// Extract transformation result
 	return e.extractTransformation(L), nil
 }
-
 
 // injectInputGlobals sets up the input globals for the script
 func (e *Engine) injectInputGlobals(L *lua.LState, webhook *domain.Webhook) error {
@@ -334,6 +334,8 @@ func (e *Engine) extractTransformation(L *lua.LState) *TransformResult {
 					})
 				}
 			}
+
+			result.Skip = lua.LVAsBool(tbl.RawGetString("skip"))
 
 			// Extract request.retry_on_status — list of status codes the
 			// script wants the worker to treat as retryable in addition to
@@ -416,6 +418,8 @@ func (e *Engine) applyTransformation(webhook *domain.Webhook, result *TransformR
 		transformed.RetryOnStatus = result.RetryOnStatus
 	}
 
+	transformed.SkipDelivery = result.Skip
+
 	// Note: OptOutDefaultHeaders will be handled by the delivery client
 
 	return &transformed
@@ -442,4 +446,3 @@ func (e *Engine) GetCrypto() *modules.CryptoModule {
 func (e *Engine) GetHTTP() *modules.HTTPModule {
 	return e.http
 }
-

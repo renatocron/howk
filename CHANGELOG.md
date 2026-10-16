@@ -5,6 +5,11 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`request.attempt` and `request.skip` for worker Lua scripts**: the `request` table now carries the current attempt number (`request.attempt`, 0-indexed, same value as `metadata.attempt`; writes are ignored). Setting `request.skip = true` finishes the webhook without an HTTP call: state `delivered`, `DeliveryResult` with `success: true`, `status_code` 0 and the new `skipped: true` field, retry data and state snapshot cleaned up as on success. `WebhookStatus` (and `GET /webhooks/{id}/status`) also report `skipped: true`. Skips are counted under the `skipped` outcome in `howk_deliveries_total` and the hourly stats, and do not affect the endpoint circuit breaker. See [docs/LUA_ENGINE.md](docs/LUA_ENGINE.md#requestskip-finish-without-sending).
+
 ## [0.4.9] - 2026-06-10
 
 ### Added

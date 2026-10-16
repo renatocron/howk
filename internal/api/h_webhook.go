@@ -151,5 +151,6 @@ func (s *Server) handleGetStatus(c *gin.Context) {
 		LastError:      status.LastError,
 		NextRetryAt:    status.NextRetryAt,
 		DeliveredAt:    status.DeliveredAt,
+		Skipped:        status.Skipped,
 	})
 }

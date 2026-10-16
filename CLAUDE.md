@@ -402,8 +402,11 @@ metadata          -- table: {attempt, config_id, webhook_id, created_at}
 previous_error    -- table|nil: {status_code, error, attempt} on retries
 
 -- Output (write to these)
+request.attempt   -- number: current attempt (0-indexed, read-only)
 request.body      -- string: override outgoing payload
 request.headers   -- table: additional/override headers
+request.retry_on_status -- table: extra status codes to treat as retryable
+request.skip      -- bool: true = no HTTP call, finish as delivered (skipped)
 config.opt_out_default_headers  -- bool: skip X-Webhook-* headers
 ```
 

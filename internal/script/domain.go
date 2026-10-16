@@ -48,16 +48,16 @@ func (e *ScriptError) Unwrap() error {
 type ScriptErrorType string
 
 const (
-	ScriptErrorNotFound       ScriptErrorType = "script_not_found"       // Script not in cache or Kafka
-	ScriptErrorSyntax         ScriptErrorType = "script_syntax_error"    // Lua syntax error
-	ScriptErrorRuntime        ScriptErrorType = "script_runtime_error"   // Lua runtime error/panic
-	ScriptErrorTimeout        ScriptErrorType = "script_timeout"         // CPU timeout exceeded
-	ScriptErrorMemoryLimit    ScriptErrorType = "script_memory_limit"    // Memory limit exceeded
-	ScriptErrorModuleKV       ScriptErrorType = "script_module_kv"       // KV module error (Redis)
-	ScriptErrorModuleHTTP     ScriptErrorType = "script_module_http"     // HTTP module error
-	ScriptErrorModuleCrypto   ScriptErrorType = "script_module_crypto"   // Crypto module error
-	ScriptErrorInvalidOutput  ScriptErrorType = "script_invalid_output"  // Script produced invalid output
-	ScriptErrorDisabled       ScriptErrorType = "script_disabled"        // Script execution disabled
+	ScriptErrorNotFound      ScriptErrorType = "script_not_found"      // Script not in cache or Kafka
+	ScriptErrorSyntax        ScriptErrorType = "script_syntax_error"   // Lua syntax error
+	ScriptErrorRuntime       ScriptErrorType = "script_runtime_error"  // Lua runtime error/panic
+	ScriptErrorTimeout       ScriptErrorType = "script_timeout"        // CPU timeout exceeded
+	ScriptErrorMemoryLimit   ScriptErrorType = "script_memory_limit"   // Memory limit exceeded
+	ScriptErrorModuleKV      ScriptErrorType = "script_module_kv"      // KV module error (Redis)
+	ScriptErrorModuleHTTP    ScriptErrorType = "script_module_http"    // HTTP module error
+	ScriptErrorModuleCrypto  ScriptErrorType = "script_module_crypto"  // Crypto module error
+	ScriptErrorInvalidOutput ScriptErrorType = "script_invalid_output" // Script produced invalid output
+	ScriptErrorDisabled      ScriptErrorType = "script_disabled"       // Script execution disabled
 )
 
 // IsRetryable returns whether a script error should trigger webhook retry
@@ -79,4 +79,5 @@ type TransformResult struct {
 	RemovedHeaders       []string          // Headers to remove (set to "" in Lua)
 	OptOutDefaultHeaders bool              // Skip X-Webhook-* headers
 	RetryOnStatus        []int             // Status codes the script wants treated as retryable
+	Skip                 bool              // request.skip: finish as delivered without sending
 }

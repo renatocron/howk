@@ -72,8 +72,12 @@ metadata.created_at    -- string: ISO8601 timestamp
 #### `request` Table
 
 ```lua
+request.attempt                  -- number: Current attempt (0-indexed), pre-set
+                                 --        before the script runs; writes are ignored
 request.body = "..."             -- string: Override outgoing body (supports binary)
 request.headers = {}             -- table: Additional/override headers
+request.skip = true              -- bool: Do not send this webhook; finish it
+                                 --       as delivered (see below)
 request.retry_on_status = {401}  -- table: Status codes to treat as retryable
                                  --        on top of the default classifier
                                  --        (5xx, 408, 429). Useful when the
@@ -116,6 +120,32 @@ request.retry_on_status = {401, 403}
 `MaxAttempts × backoff` before reaching DLQ instead of failing fast on the
 first 401. If your script has a high `MaxAttempts`, consider lowering it for
 this config or designing a smaller auth-retry budget.
+
+##### `request.skip`: finish without sending
+
+Set `request.skip = true` when the script decides the webhook should not be
+sent at all, for example because the target already has the data or the
+event is no longer relevant on a later attempt. The worker then:
+
+- makes no HTTP request;
+- marks the webhook `delivered` (status `GET /webhooks/{id}/status` returns
+  `"state": "delivered"` with `"skipped": true`);
+- publishes a `DeliveryResult` with `success: true`, `status_code` 0 and
+  `skipped: true`;
+- cleans up retry data and the state snapshot like any other success;
+- leaves the endpoint circuit breaker untouched (neither success nor failure);
+- counts the outcome as `skipped` in `howk_deliveries_total` and in the hourly
+  stats, not as `delivered`.
+
+The script runs on every attempt, including retries, so `request.attempt`
+can drive the decision:
+
+```lua
+-- Give up quietly after the third attempt instead of going to DLQ.
+if request.attempt >= 3 then
+    request.skip = true
+end
+```
 
 #### `config` Table
 

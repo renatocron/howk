@@ -899,6 +899,70 @@ func TestHandleScriptError_SuccessfulScript(t *testing.T) {
 	mockDelivery.AssertCalled(t, "Deliver", mock.Anything, mock.Anything)
 }
 
+// TestScriptSkip_FinishesAsDeliveredWithoutHTTP verifies that request.skip = true
+// ends the webhook as delivered without calling the endpoint or the circuit breaker.
+func TestScriptSkip_FinishesAsDeliveredWithoutHTTP(t *testing.T) {
+	w, mockPublisher, mockHotState, mockCircuitBreaker, mockDelivery, _, loader :=
+		setupWorkerForScriptTest(t, true)
+
+	wh := webhookWithScript("skip-hash")
+	wh.Attempt = 2
+	loader.SetScript(&script.Config{
+		ConfigID: wh.ConfigID,
+		LuaCode:  `if request.attempt == 2 then request.skip = true end`,
+		Hash:     "skip-hash",
+	})
+	msg := makeWebhookMsg(t, wh)
+
+	commonScriptTestPrelude(mockHotState, mockCircuitBreaker, wh)
+
+	var statuses []*domain.WebhookStatus
+	mockHotState.On("SetStatus", mock.Anything, mock.AnythingOfType("*domain.WebhookStatus")).
+		Run(func(args mock.Arguments) {
+			statuses = append(statuses, args.Get(1).(*domain.WebhookStatus))
+		}).Return(nil)
+	var stats []string
+	mockHotState.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			for k := range args.Get(2).(map[string]int64) {
+				stats = append(stats, k)
+			}
+		}).Return(nil)
+	var published *domain.DeliveryResult
+	mockPublisher.On("PublishResult", mock.Anything, mock.AnythingOfType("*domain.DeliveryResult")).
+		Run(func(args mock.Arguments) {
+			published = args.Get(1).(*domain.DeliveryResult)
+		}).Return(nil)
+	mockHotState.On("DeleteRetryData", mock.Anything, wh.ID).Return(nil)
+
+	stdHotStateExpectations(mockHotState)
+
+	err := w.ProcessMessage(context.Background(), msg)
+	require.NoError(t, err)
+
+	mockDelivery.AssertNotCalled(t, "Deliver", mock.Anything, mock.Anything)
+	mockCircuitBreaker.AssertNotCalled(t, "RecordSuccess", mock.Anything, mock.Anything)
+	mockCircuitBreaker.AssertNotCalled(t, "RecordFailure", mock.Anything, mock.Anything)
+	mockPublisher.AssertNotCalled(t, "PublishDeadLetter", mock.Anything, mock.Anything)
+	mockHotState.AssertCalled(t, "DeleteRetryData", mock.Anything, wh.ID)
+	mockHotState.AssertCalled(t, "DecrInflight", mock.Anything, wh.EndpointHash)
+
+	require.NotNil(t, published)
+	assert.True(t, published.Success)
+	assert.True(t, published.Skipped)
+	assert.Equal(t, 0, published.StatusCode)
+	assert.Equal(t, 2, published.Attempt)
+
+	require.NotEmpty(t, statuses)
+	last := statuses[len(statuses)-1]
+	assert.Equal(t, domain.StateDelivered, last.State)
+	assert.True(t, last.Skipped)
+	assert.NotNil(t, last.DeliveredAt)
+
+	assert.Contains(t, stats, "skipped")
+	assert.NotContains(t, stats, "delivered")
+}
+
 // ---------------------------------------------------------------------------
 // Step 4.8 – SlowWorker.processSlowMessage NACK propagation
 // ---------------------------------------------------------------------------

@@ -52,6 +52,9 @@ type Webhook struct {
 	// and a 4xx may resolve on retry with a fresh fetch. Merged on top of
 	// domain.IsRetryable() — it does NOT replace the default classifier.
 	RetryOnStatus []int `json:"retry_on_status,omitempty"`
+
+	// Set by a worker script via request.skip; never serialized, so it applies to the current attempt only.
+	SkipDelivery bool `json:"-"`
 }
 
 // DeliveryResult represents the outcome of a delivery attempt
@@ -66,6 +69,7 @@ type DeliveryResult struct {
 	Error        string        `json:"error,omitempty"`
 	Duration     time.Duration `json:"duration_ns"`
 	Timestamp    time.Time     `json:"timestamp"`
+	Skipped      bool          `json:"skipped,omitempty"`
 
 	// For retry scheduling
 	ShouldRetry bool      `json:"should_retry"`
@@ -89,6 +93,7 @@ type WebhookStatus struct {
 	LastError      string       `json:"last_error,omitempty"`
 	NextRetryAt    *time.Time   `json:"next_retry_at,omitempty"`
 	DeliveredAt    *time.Time   `json:"delivered_at,omitempty"`
+	Skipped        bool         `json:"skipped,omitempty"`
 	UpdatedAtNs    int64        `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
 }
 
@@ -253,8 +258,8 @@ const (
 // DeadLetter represents a webhook that has been sent to the dead letter queue
 type DeadLetter struct {
 	Webhook      *Webhook         `json:"webhook"`
-	Reason       string           `json:"reason"`        // Human-readable reason
-	ReasonType   DeadLetterReason `json:"reason_type"`   // Machine-readable type
+	Reason       string           `json:"reason"`      // Human-readable reason
+	ReasonType   DeadLetterReason `json:"reason_type"` // Machine-readable type
 	LastError    string           `json:"last_error,omitempty"`
 	StatusCode   int              `json:"status_code,omitempty"`
 	ResponseBody string           `json:"response_body,omitempty"` // First 1KB of endpoint response — useful to diagnose 4xx
@@ -349,9 +354,9 @@ type WebhookStateSnapshot struct {
 	// State Info
 	State       WebhookState `json:"state"`
 	Attempt     int          `json:"attempt"`
-	MaxAttempts int       `json:"max_attempts"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAtNs int64     `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
+	MaxAttempts int          `json:"max_attempts"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAtNs int64        `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
 
 	// Scheduling
 	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
