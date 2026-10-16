@@ -52,6 +52,9 @@ type Webhook struct {
 	// and a 4xx may resolve on retry with a fresh fetch. Merged on top of
 	// domain.IsRetryable() — it does NOT replace the default classifier.
 	RetryOnStatus []int `json:"retry_on_status,omitempty"`
+
+	// Ordered webhooks are never diverted to the slow lane, keeping per-ConfigID partition order.
+	Ordered bool `json:"ordered,omitempty"`
 }
 
 // DeliveryResult represents the outcome of a delivery attempt
@@ -177,6 +180,7 @@ type NewWebhookOpts struct {
 	MaxAttempts         int
 	DeliveryQueryParams map[string]string
 	DeliveryHeaders     map[string]string
+	Ordered             bool
 }
 
 // NewWebhook constructs a Webhook with a fresh ULID identifier, a consistent
@@ -202,6 +206,7 @@ func NewWebhook(opts NewWebhookOpts) *Webhook {
 		ScriptHash:          opts.ScriptHash,
 		DeliveryQueryParams: opts.DeliveryQueryParams,
 		DeliveryHeaders:     opts.DeliveryHeaders,
+		Ordered:             opts.Ordered,
 		Attempt:             0,
 		MaxAttempts:         maxAttempts,
 		CreatedAt:           now,
@@ -253,8 +258,8 @@ const (
 // DeadLetter represents a webhook that has been sent to the dead letter queue
 type DeadLetter struct {
 	Webhook      *Webhook         `json:"webhook"`
-	Reason       string           `json:"reason"`        // Human-readable reason
-	ReasonType   DeadLetterReason `json:"reason_type"`   // Machine-readable type
+	Reason       string           `json:"reason"`      // Human-readable reason
+	ReasonType   DeadLetterReason `json:"reason_type"` // Machine-readable type
 	LastError    string           `json:"last_error,omitempty"`
 	StatusCode   int              `json:"status_code,omitempty"`
 	ResponseBody string           `json:"response_body,omitempty"` // First 1KB of endpoint response — useful to diagnose 4xx
@@ -345,13 +350,14 @@ type WebhookStateSnapshot struct {
 	DeliveryQueryParams map[string]string `json:"_delivery_query_params,omitempty"`
 	DeliveryHeaders     map[string]string `json:"_delivery_headers,omitempty"`
 	RetryOnStatus       []int             `json:"retry_on_status,omitempty"`
+	Ordered             bool              `json:"ordered,omitempty"`
 
 	// State Info
 	State       WebhookState `json:"state"`
 	Attempt     int          `json:"attempt"`
-	MaxAttempts int       `json:"max_attempts"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAtNs int64     `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
+	MaxAttempts int          `json:"max_attempts"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAtNs int64        `json:"updated_at_ns"` // Nanosecond timestamp for LWW conflict resolution
 
 	// Scheduling
 	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`

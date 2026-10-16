@@ -227,6 +227,7 @@ stateDiagram-v2
 
         CheckConcurrency --> FastLane: inflight < threshold
         CheckConcurrency --> DivertToSlow: inflight ≥ threshold
+        CheckConcurrency --> FastLane: ordered webhook (never diverted)
 
         FastLane --> HTTPDeliver: INCR concurrency
         DivertToSlow --> [*]: Publish to howk.slow
@@ -302,7 +303,7 @@ stateDiagram-v2
 |-----------|-----------|----------------|-------------|
 | `IncrInflight()` | Worker | `INCR concurrency:{hash}`<br>`EXPIRE concurrency:{hash} {ttl}` | Before delivery attempt |
 | `DecrInflight()` | Worker | `Lua: DECR if > 0` | After delivery (success/fail/DLQ) |
-| `PublishToSlow()` | Worker | Kafka Produce to `howk.slow` | When inflight ≥ threshold |
+| `PublishToSlow()` | Worker | Kafka Produce to `howk.slow` | When inflight ≥ threshold (never for `ordered` webhooks) |
 | `StoreRetryData()` | Worker | `SET retry_data:{id} compressed EX 604800` | Before scheduling retry |
 | `ScheduleRetry()` | Worker | `ZADD retries score member`<br>`SET retry_meta:{ref}` | After storing data |
 | `PopAndLockRetries()` | Scheduler | `Lua: ZRANGEBYSCORE + ZADD future` | Poll loop (every 1s) |

@@ -256,6 +256,7 @@ func TestReconciler_restoreState_FailedWithRetry(t *testing.T) {
 		CreatedAt:    now,
 		NextRetryAt:  &nextRetry,
 		LastError:    "connection timeout",
+		Ordered:      true,
 	}
 
 	// Expect SetStatus to be called
@@ -267,7 +268,9 @@ func TestReconciler_restoreState_FailedWithRetry(t *testing.T) {
 	})).Return(nil)
 
 	// Expect EnsureRetryData to be called with configured TTL
-	mockHS.On("EnsureRetryData", mock.Anything, mock.Anything, time.Hour).Return(nil)
+	mockHS.On("EnsureRetryData", mock.Anything, mock.MatchedBy(func(wh *domain.Webhook) bool {
+		return wh.Ordered
+	}), time.Hour).Return(nil)
 
 	// Expect ScheduleRetry to be called
 	mockHS.On("ScheduleRetry", mock.Anything, webhookID, 2, nextRetry, "reconciled").Return(nil)
@@ -411,6 +414,7 @@ func TestWebhookStateSnapshot_JSONSerialization(t *testing.T) {
 		IdempotencyKey: "idem-key-123",
 		SigningSecret:  "secret-123",
 		ScriptHash:     "hash-123",
+		Ordered:        true,
 		State:          domain.StateFailed,
 		Attempt:        3,
 		MaxAttempts:    10,
@@ -436,6 +440,7 @@ func TestWebhookStateSnapshot_JSONSerialization(t *testing.T) {
 	assert.Equal(t, snapshot.IdempotencyKey, unmarshaled.IdempotencyKey)
 	assert.Equal(t, snapshot.SigningSecret, unmarshaled.SigningSecret)
 	assert.Equal(t, snapshot.ScriptHash, unmarshaled.ScriptHash)
+	assert.True(t, unmarshaled.Ordered)
 	assert.Equal(t, snapshot.State, unmarshaled.State)
 	assert.Equal(t, snapshot.Attempt, unmarshaled.Attempt)
 	assert.Equal(t, snapshot.MaxAttempts, unmarshaled.MaxAttempts)

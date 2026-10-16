@@ -710,3 +710,27 @@ func TestEnqueue_RequireScript_BatchAllOrNothing(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 	mockPub.AssertNotCalled(t, "PublishWebhook", mock.Anything, mock.Anything)
 }
+
+func TestEnqueue_Ordered_PassedThrough(t *testing.T) {
+	server, mockPub, mockHS, _, _ := setupTestServer(t)
+
+	mockPub.On("PublishWebhook", mock.Anything, mock.MatchedBy(func(wh *domain.Webhook) bool {
+		return wh.Ordered
+	})).Return(nil)
+	mockHS.On("SetStatus", mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("IncrStats", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("AddToHLL", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockHS.On("GetScript", mock.Anything, domain.ConfigID("test-config")).Return("", errors.New("not found"))
+
+	reqBody := `{"endpoint":"https://example.com/webhook","payload":{"a":1},"ordered":true}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/webhooks/test-config/enqueue", bytes.NewBufferString(reqBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "config", Value: "test-config"}}
+
+	server.handleEnqueueWebhook(c)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	mockPub.AssertExpectations(t)
+}

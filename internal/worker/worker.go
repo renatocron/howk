@@ -185,9 +185,9 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		},
 		// Domain gate has no fail-open re-acquire; if divert fails we proceed without re-taking the slot.
 		ReacquireOnDivertFail: nil,
-		NackErr:    fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint),
-		LogDivert:  "Domain concurrency limit reached, diverting to slow lane",
-		LogSatured: "Domain concurrency limit reached even in slow lane, NACKing for retry",
+		NackErr:               fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint),
+		LogDivert:             "Domain concurrency limit reached, diverting to slow lane",
+		LogSatured:            "Domain concurrency limit reached even in slow lane, NACKing for retry",
 	})
 	if err != nil {
 		// err is either the NACK sentinel or the gated divert-succeeded signal
@@ -558,6 +558,7 @@ func (w *Worker) publishStateSnapshot(ctx context.Context, webhook *domain.Webho
 				DeliveryQueryParams: webhook.DeliveryQueryParams,
 				DeliveryHeaders:     webhook.DeliveryHeaders,
 				RetryOnStatus:       webhook.RetryOnStatus,
+				Ordered:             webhook.Ordered,
 				State:               state,
 				Attempt:             webhook.Attempt,
 				MaxAttempts:         webhook.MaxAttempts,
@@ -803,6 +804,11 @@ func (w *Worker) runConcurrencyGate(
 	if isSlowLane {
 		log.Info().Msg(gate.LogSatured)
 		return false, gate.NackErr
+	}
+
+	if webhook.Ordered {
+		log.Info().Str("webhook_id", string(webhook.ID)).Msg("Concurrency gate at capacity for ordered webhook, delivering in place instead of diverting")
+		return false, nil
 	}
 
 	log.Info().Msg(gate.LogDivert)
