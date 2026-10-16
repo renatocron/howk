@@ -534,6 +534,9 @@ Response:
 }
 ```
 
+`"skipped": true` is added when a worker Lua script set `request.skip` and the
+webhook was finished as `delivered` without an HTTP call.
+
 ### Get Stats
 
 ```

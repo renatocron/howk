@@ -185,9 +185,9 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		},
 		// Domain gate has no fail-open re-acquire; if divert fails we proceed without re-taking the slot.
 		ReacquireOnDivertFail: nil,
-		NackErr:    fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint),
-		LogDivert:  "Domain concurrency limit reached, diverting to slow lane",
-		LogSatured: "Domain concurrency limit reached even in slow lane, NACKing for retry",
+		NackErr:               fmt.Errorf("domain concurrency limit reached in slow lane: %s", webhook.Endpoint),
+		LogDivert:             "Domain concurrency limit reached, diverting to slow lane",
+		LogSatured:            "Domain concurrency limit reached even in slow lane, NACKing for retry",
 	})
 	if err != nil {
 		// err is either the NACK sentinel or the gated divert-succeeded signal
@@ -275,6 +275,10 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		// Use transformed webhook for delivery
 		webhook = *transformed
 		logger.Debug().Msg("Script transformation applied successfully")
+
+		if webhook.SkipDelivery {
+			return w.handleScriptSkip(ctx, &webhook)
+		}
 	}
 
 	// Resolve delivery-time overrides. Templates are resolved against the
@@ -327,22 +331,13 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 			logger.Debug().Msg("Circuit closed")
 		}
 
-		// Update status
-		w.updateStatus(ctx, &webhook, domain.StateDelivered, deliveryResult)
-
-		// Publish result
-		if err := w.publisher.PublishResult(ctx, deliveryResult); err != nil {
-			logger.Error().Err(err).Msg("Failed to publish result")
-		}
+		w.finishDelivered(ctx, &webhook, deliveryResult)
 
 		// Record stats for the fast lane; slow lane adds its own counter below
 		w.recordStats(ctx, "delivered", &webhook)
 		if isSlowLane {
 			w.recordStats(ctx, "slow_delivered", &webhook)
 		}
-
-		// Cleanup retry data on success (terminal state)
-		w.cleanupRetryData(ctx, &webhook)
 
 		return nil
 	}
@@ -457,6 +452,43 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 	return nil
 }
 
+// finishDelivered marks the webhook delivered, publishes the result and drops its retry data.
+func (w *Worker) finishDelivered(ctx context.Context, webhook *domain.Webhook, result *domain.DeliveryResult) {
+	w.updateStatus(ctx, webhook, domain.StateDelivered, result)
+
+	if err := w.publisher.PublishResult(ctx, result); err != nil {
+		log.Error().Err(err).Str("webhook_id", string(webhook.ID)).Msg("Failed to publish result")
+	}
+
+	w.cleanupRetryData(ctx, webhook)
+}
+
+// handleScriptSkip finishes a webhook whose script set request.skip; the circuit breaker is not touched.
+func (w *Worker) handleScriptSkip(ctx context.Context, webhook *domain.Webhook) error {
+	log.Info().
+		Str("webhook_id", string(webhook.ID)).
+		Str("config_id", string(webhook.ConfigID)).
+		Int("attempt", webhook.Attempt).
+		Msg("Delivery skipped by script")
+
+	metrics.DeliveriesTotal.WithLabelValues("skipped").Inc()
+
+	w.finishDelivered(ctx, webhook, &domain.DeliveryResult{
+		WebhookID:    webhook.ID,
+		ConfigID:     webhook.ConfigID,
+		Endpoint:     webhook.Endpoint,
+		EndpointHash: webhook.EndpointHash,
+		Attempt:      webhook.Attempt,
+		Success:      true,
+		Skipped:      true,
+		Timestamp:    time.Now(),
+		Webhook:      webhook,
+	})
+
+	w.recordStats(ctx, "skipped", webhook)
+	return nil
+}
+
 // scheduleRetry stores retry data and schedules the reference in ZSET
 func (w *Worker) scheduleRetry(ctx context.Context, webhook *domain.Webhook, scheduledAt time.Time, reason string) error {
 	// 1. Ensure Data (Lazy) - only writes if missing, otherwise refreshes TTL (no compression/payload transfer)
@@ -506,6 +538,7 @@ func (w *Worker) updateStatus(ctx context.Context, webhook *domain.Webhook, stat
 		if result.Success {
 			status.DeliveredAt = &attemptTime
 		}
+		status.Skipped = result.Skipped
 	}
 
 	if err := w.hotstate.SetStatus(ctx, status); err != nil {

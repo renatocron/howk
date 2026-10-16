@@ -193,6 +193,7 @@ type StatusResponse struct {
 	LastError      string     `json:"last_error,omitempty"`
 	NextRetryAt    *time.Time `json:"next_retry_at,omitempty"`
 	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	Skipped        bool       `json:"skipped,omitempty"`
 }
 
 type StatsResponse struct {

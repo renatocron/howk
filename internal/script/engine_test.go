@@ -3,6 +3,7 @@ package script
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -72,6 +73,59 @@ func TestEngine_Execute_RetryOnStatus(t *testing.T) {
 
 	if len(result.RetryOnStatus) != 2 || result.RetryOnStatus[0] != 401 || result.RetryOnStatus[1] != 403 {
 		t.Errorf("Expected RetryOnStatus=[401,403], got %v", result.RetryOnStatus)
+	}
+}
+
+func TestEngine_Execute_AttemptAndSkip(t *testing.T) {
+	cfg := config.LuaConfig{
+		Enabled: true,
+		Timeout: 1 * time.Second,
+	}
+
+	loader := NewLoader()
+	loader.SetScript(&Config{
+		ConfigID: "test_config",
+		LuaCode: `
+			headers["X-Seen-Attempt"] = tostring(request.attempt)
+			if request.attempt >= 2 then
+				request.skip = true
+			end
+			request.attempt = 99
+		`,
+		Hash: "skipattempt",
+	})
+
+	engine := NewEngine(cfg, loader, nil, nil, nil, zerolog.Logger{})
+	defer engine.Close()
+
+	for _, tc := range []struct {
+		attempt  int
+		wantSkip bool
+	}{
+		{attempt: 0, wantSkip: false},
+		{attempt: 2, wantSkip: true},
+	} {
+		webhook := &domain.Webhook{
+			ConfigID: "test_config",
+			Payload:  json.RawMessage(`{}`),
+			Headers:  map[string]string{},
+			Attempt:  tc.attempt,
+		}
+
+		result, err := engine.Execute(context.Background(), webhook)
+		if err != nil {
+			t.Fatalf("Execute() unexpected error: %v", err)
+		}
+
+		if got := result.Headers["X-Seen-Attempt"]; got != fmt.Sprint(tc.attempt) {
+			t.Errorf("attempt %d: expected request.attempt=%d, got %s", tc.attempt, tc.attempt, got)
+		}
+		if result.SkipDelivery != tc.wantSkip {
+			t.Errorf("attempt %d: expected SkipDelivery=%v, got %v", tc.attempt, tc.wantSkip, result.SkipDelivery)
+		}
+		if result.Attempt != tc.attempt {
+			t.Errorf("attempt %d: script write to request.attempt leaked, got %d", tc.attempt, result.Attempt)
+		}
 	}
 }
 
