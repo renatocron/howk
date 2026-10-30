@@ -5,7 +5,7 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.10] - 2026-10-30
 
 ### Added
 - **Response body logging (`delivery.log_response_body`)**: New opt-in flag that adds `response_body` and `response_content_type` to the worker's "Delivery succeeded" and "Delivery failed" logs. Lets operators see what an endpoint actually returned on a 2xx (e.g. an HTML WAF page instead of the expected JSON). `delivery.log_response_body_config_prefix` limits it to webhooks whose `config_id` starts with the prefix, so other receivers' bodies stay out of logs. Env: `HOWK_DELIVERY_LOG_RESPONSE_BODY`, `HOWK_DELIVERY_LOG_RESPONSE_BODY_CONFIG_PREFIX`.
