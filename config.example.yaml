@@ -43,6 +43,9 @@ delivery:
   dump_requests: false  # debug: log exact outgoing request (headers+body) after Lua/overrides/signing
   log_response_body: false  # log response body (first 2KB) + Content-Type on delivery success/failure
   log_response_body_config_prefix: ""  # limit log_response_body to config_ids with this prefix (empty = all)
+  # Hosts answered with a fake 200 (or /NNN from the path) and never called; each entry matches its subdomains.
+  null_route_hosts: [".test", ".example", ".invalid", "example.com", "example.net", "example.org"]
+  null_route_extra_hosts: []  # appended to null_route_hosts, e.g. junk domains devs keep using
 
 retry:
   base_delay: 10s

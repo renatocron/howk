@@ -17,9 +17,9 @@ import (
 	"github.com/howk/howk/internal/hotstate"
 	"github.com/howk/howk/internal/metrics"
 	"github.com/howk/howk/internal/retry"
+	"github.com/howk/howk/internal/scheduler"
 	"github.com/howk/howk/internal/script"
 	"github.com/howk/howk/internal/script/modules"
-	"github.com/howk/howk/internal/scheduler"
 	"github.com/howk/howk/internal/transformer"
 	"github.com/howk/howk/internal/worker"
 )
@@ -115,6 +115,7 @@ func main() {
 		defer client.Close()
 		dc = client
 	}
+	dc = delivery.NewNullRouter(dc, cfg.Delivery.NullRouteHosts, cfg.Delivery.NullRouteExtraHosts)
 
 	// --- Worker ---
 	domainLimiter := delivery.NewNoopDomainLimiter()

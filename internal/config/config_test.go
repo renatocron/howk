@@ -84,6 +84,24 @@ func TestLoadConfigLogResponseBody(t *testing.T) {
 	assert.Equal(t, "wh:acme:", cfg.Delivery.LogResponseBodyConfigPrefix)
 }
 
+func TestLoadConfigNullRouteHosts(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(originalDir)
+
+	cfg, err := LoadConfig("")
+	require.NoError(t, err)
+	assert.Contains(t, cfg.Delivery.NullRouteHosts, ".test")
+	assert.Empty(t, cfg.Delivery.NullRouteExtraHosts)
+
+	t.Setenv("HOWK_DELIVERY_NULL_ROUTE_EXTRA_HOSTS", "jaskjdakjkdjsa.com,teste.qualquercoisa")
+	cfg, err = LoadConfig("")
+	require.NoError(t, err)
+	assert.Contains(t, cfg.Delivery.NullRouteHosts, ".test")
+	assert.Equal(t, []string{"jaskjdakjkdjsa.com", "teste.qualquercoisa"}, cfg.Delivery.NullRouteExtraHosts)
+}
+
 func TestLoadConfigFromFile(t *testing.T) {
 	// Create a temporary directory and config file
 	tmpDir := t.TempDir()

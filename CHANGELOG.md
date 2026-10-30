@@ -5,6 +5,11 @@ All notable changes to HOWK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Null-routed delivery hosts (`delivery.null_route_hosts`, `delivery.null_route_extra_hosts`)**: the worker answers webhooks for these hosts with a synthetic response and never touches the network, so test webhooks stop opening circuits, scheduling retries and filling the DLQ. Each entry matches the host and its subdomains. Defaults are the RFC 2606 reserved names (`.test`, `.example`, `.invalid`, `example.com/net/org`); `localhost` is not included. `null_route_extra_hosts` is appended to the defaults for junk domains devs keep using. A path of `/NNN` returns that status, so `https://sink.howk.test/` gives 200 and `https://sink.howk.test/500` exercises the retry path. Env: `HOWK_DELIVERY_NULL_ROUTE_HOSTS`, `HOWK_DELIVERY_NULL_ROUTE_EXTRA_HOSTS` (comma-separated).
+
 ## [0.4.10] - 2026-10-30
 
 ### Added

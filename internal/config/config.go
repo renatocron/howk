@@ -137,6 +137,11 @@ type DeliveryConfig struct {
 	LogResponseBody bool `mapstructure:"log_response_body"`
 	// LogResponseBodyConfigPrefix limits LogResponseBody to ConfigIDs with this prefix; empty means all.
 	LogResponseBodyConfigPrefix string `mapstructure:"log_response_body_config_prefix"`
+
+	// NullRouteHosts get a fake response without any network call; each entry also matches its subdomains.
+	NullRouteHosts []string `mapstructure:"null_route_hosts"`
+	// NullRouteExtraHosts is appended to NullRouteHosts so operators can add junk test domains without restating the defaults.
+	NullRouteExtraHosts []string `mapstructure:"null_route_extra_hosts"`
 }
 
 type RetryConfig struct {
@@ -263,6 +268,8 @@ func DefaultConfig() *Config {
 			UserAgent:           "HOWK/1.0",
 			DumpRequests:        false,
 			LogResponseBody:     false,
+			// RFC 2606 reserved names; localhost is left out because local dev delivers there.
+			NullRouteHosts: []string{".test", ".example", ".invalid", "example.com", "example.net", "example.org"},
 		},
 		Retry: RetryConfig{
 			BaseDelay:   10 * time.Second,
@@ -427,6 +434,8 @@ func bindEnvVariables(v *viper.Viper) error {
 		"delivery.dump_requests",
 		"delivery.log_response_body",
 		"delivery.log_response_body_config_prefix",
+		"delivery.null_route_hosts",
+		"delivery.null_route_extra_hosts",
 		// Retry
 		"retry.base_delay",
 		"retry.max_delay",

@@ -53,8 +53,9 @@ func main() {
 	defer hs.Close()
 
 	// Initialize delivery client
-	dc := delivery.NewClient(cfg.Delivery)
-	defer dc.Close()
+	client := delivery.NewClient(cfg.Delivery)
+	defer client.Close()
+	dc := delivery.NewNullRouter(client, cfg.Delivery.NullRouteHosts, cfg.Delivery.NullRouteExtraHosts)
 
 	// Initialize domain limiter (if enabled)
 	var domainLimiter delivery.DomainLimiter
