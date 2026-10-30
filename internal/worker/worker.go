@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/howk/howk/internal/broker"
@@ -313,7 +315,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 		metrics.DeliveriesTotal.WithLabelValues("success").Inc()
 		metrics.DeliveryDuration.Observe(result.Duration.Seconds())
 
-		logger.Info().
+		w.withResponseBody(logger.Info(), webhook.ConfigID, result).
 			Int("status_code", result.StatusCode).
 			Dur("duration", result.Duration).
 			Msg("Delivery succeeded")
@@ -348,7 +350,7 @@ func (w *Worker) processMessage(ctx context.Context, msg *broker.Message, isSlow
 	}
 
 	// Handle failure
-	logger.Warn().
+	w.withResponseBody(logger.Warn(), webhook.ConfigID, result).
 		Int("status_code", result.StatusCode).
 		Str("error", deliveryResult.Error).
 		Dur("duration", result.Duration).
@@ -732,6 +734,15 @@ func (w *Worker) dlqResponseBody(body string) string {
 		return ""
 	}
 	return body
+}
+
+// withResponseBody adds the response body and Content-Type to ev when delivery.log_response_body applies to configID.
+func (w *Worker) withResponseBody(ev *zerolog.Event, configID domain.ConfigID, result *delivery.Result) *zerolog.Event {
+	cfg := w.config.Delivery
+	if !cfg.LogResponseBody || !strings.HasPrefix(string(configID), cfg.LogResponseBodyConfigPrefix) {
+		return ev
+	}
+	return ev.Str("response_body", result.ResponseBody).Str("response_content_type", result.ContentType)
 }
 
 // ErrDiverted is a sentinel error returned by runConcurrencyGate when the

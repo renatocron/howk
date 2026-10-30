@@ -182,9 +182,10 @@ func TestDeliver_InvalidURL(t *testing.T) {
 func TestDeliver_ResponseBodyTruncation(t *testing.T) {
 	// Server returns a large response body
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
-		// Write more than maxResponseBody (1024 bytes)
-		largeBody := make([]byte, 2000)
+		// Write more than maxResponseBody (2048 bytes)
+		largeBody := make([]byte, 4000)
 		for i := range largeBody {
 			largeBody[i] = 'x'
 		}
@@ -200,8 +201,8 @@ func TestDeliver_ResponseBodyTruncation(t *testing.T) {
 	
 	assert.NoError(t, result.Error)
 	assert.Equal(t, http.StatusOK, result.StatusCode)
-	// Response body should be truncated to ~1024 bytes
-	assert.LessOrEqual(t, len(result.ResponseBody), 1100)
+	assert.Len(t, result.ResponseBody, 2048)
+	assert.Equal(t, "text/html", result.ContentType)
 }
 
 func TestDeliver_NoSignatureWithoutSecret(t *testing.T) {

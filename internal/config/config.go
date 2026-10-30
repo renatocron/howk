@@ -39,7 +39,7 @@ type Config struct {
 // DLQConfig controls what is persisted to the dead letter topic when a webhook
 // is exhausted or hits an unrecoverable failure. Defaults are safe for an
 // open-source deployment: secret-bearing headers are redacted and the first
-// 1KB of the endpoint response body is included to help diagnose 4xx errors.
+// 2KB of the endpoint response body is included to help diagnose 4xx errors.
 type DLQConfig struct {
 	// RedactHeaders overrides the built-in DefaultSensitiveHeaders list. When
 	// set (even to a single name), it FULLY REPLACES the defaults — there is no
@@ -52,7 +52,7 @@ type DLQConfig struct {
 	// debugging. Default: false (redaction on).
 	DisableRedaction bool `mapstructure:"disable_redaction"`
 
-	// IncludeResponseBody controls whether the first 1KB of the endpoint
+	// IncludeResponseBody controls whether the first 2KB of the endpoint
 	// response body (captured by delivery.Client) is attached to DLQ records.
 	// Useful for diagnosing 4xx errors, but receiver responses can contain PII
 	// in some deployments. Default: true.
@@ -132,6 +132,11 @@ type DeliveryConfig struct {
 	// keep it disabled in production. The dump is emitted via the structured
 	// logger (stdout / configured sink) tagged with the webhook ID.
 	DumpRequests bool `mapstructure:"dump_requests"`
+
+	// LogResponseBody adds the endpoint response body and Content-Type to the worker's delivery logs.
+	LogResponseBody bool `mapstructure:"log_response_body"`
+	// LogResponseBodyConfigPrefix limits LogResponseBody to ConfigIDs with this prefix; empty means all.
+	LogResponseBodyConfigPrefix string `mapstructure:"log_response_body_config_prefix"`
 }
 
 type RetryConfig struct {
@@ -257,6 +262,7 @@ func DefaultConfig() *Config {
 			TLSHandshakeTimeout: 10 * time.Second,
 			UserAgent:           "HOWK/1.0",
 			DumpRequests:        false,
+			LogResponseBody:     false,
 		},
 		Retry: RetryConfig{
 			BaseDelay:   10 * time.Second,
@@ -419,6 +425,8 @@ func bindEnvVariables(v *viper.Viper) error {
 		"delivery.tls_handshake_timeout",
 		"delivery.user_agent",
 		"delivery.dump_requests",
+		"delivery.log_response_body",
+		"delivery.log_response_body_config_prefix",
 		// Retry
 		"retry.base_delay",
 		"retry.max_delay",

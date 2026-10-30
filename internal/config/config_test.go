@@ -65,6 +65,25 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 24*time.Hour, cfg.TTL.IdempotencyTTL)
 }
 
+func TestLoadConfigLogResponseBody(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(originalDir)
+
+	cfg, err := LoadConfig("")
+	require.NoError(t, err)
+	assert.False(t, cfg.Delivery.LogResponseBody)
+	assert.Empty(t, cfg.Delivery.LogResponseBodyConfigPrefix)
+
+	t.Setenv("HOWK_DELIVERY_LOG_RESPONSE_BODY", "true")
+	t.Setenv("HOWK_DELIVERY_LOG_RESPONSE_BODY_CONFIG_PREFIX", "wh:acme:")
+	cfg, err = LoadConfig("")
+	require.NoError(t, err)
+	assert.True(t, cfg.Delivery.LogResponseBody)
+	assert.Equal(t, "wh:acme:", cfg.Delivery.LogResponseBodyConfigPrefix)
+}
+
 func TestLoadConfigFromFile(t *testing.T) {
 	// Create a temporary directory and config file
 	tmpDir := t.TempDir()

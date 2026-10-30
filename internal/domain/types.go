@@ -257,7 +257,7 @@ type DeadLetter struct {
 	ReasonType   DeadLetterReason `json:"reason_type"`   // Machine-readable type
 	LastError    string           `json:"last_error,omitempty"`
 	StatusCode   int              `json:"status_code,omitempty"`
-	ResponseBody string           `json:"response_body,omitempty"` // First 1KB of endpoint response — useful to diagnose 4xx
+	ResponseBody string           `json:"response_body,omitempty"` // First 2KB of endpoint response — useful to diagnose 4xx
 	Time         time.Time        `json:"time"`
 }
 

@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	maxResponseBody = 1024 // Only read first 1KB of response for logging
+	maxResponseBody = 2048 // Only read first 2KB of response for logging
 )
 
 // Deliverer abstracts the Deliver method
@@ -39,6 +39,7 @@ type Client struct {
 type Result struct {
 	StatusCode   int
 	ResponseBody string
+	ContentType  string
 	Duration     time.Duration
 	Error        error
 }
@@ -127,6 +128,7 @@ func (c *Client) Deliver(ctx context.Context, webhook *domain.Webhook) *Result {
 	return &Result{
 		StatusCode:   resp.StatusCode,
 		ResponseBody: string(bodyBytes),
+		ContentType:  resp.Header.Get("Content-Type"),
 		Duration:     time.Since(start),
 	}
 }
